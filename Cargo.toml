@@ -1,0 +1,14 @@
+[package]
+name = "dropmutt-site"
+version = "0.1.0"
+authors = ["asonix <asonix.dev@gmail.com>"]
+
+[dependencies]
+actix = "0.5"
+actix-web = "0.5"
+env_logger = "0.5"
+futures = "0.1.21"
+futures-fs = "0.0.3"
+http = "0.1.5"
+log = "0.4"
+mime = "0.3.5"
