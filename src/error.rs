@@ -33,6 +33,8 @@ pub enum DropmuttError {
     FileCount,
     #[fail(display = "Field name contained invalid utf8")]
     Utf8,
+    #[fail(display = "Failed to log in user")]
+    Login,
 }
 
 impl From<Error> for DropmuttError {
@@ -92,6 +94,7 @@ impl ResponseError for DropmuttError {
             | DropmuttError::UrlEncoded
             | DropmuttError::Fieldname
             | DropmuttError::Utf8
+            | DropmuttError::Login
             | DropmuttError::Filename => HttpResponse::BadRequest().json(DropmutErrorResponse {
                 errors: vec![format!("{}", self)],
             }),

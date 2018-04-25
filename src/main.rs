@@ -1,6 +1,8 @@
 extern crate actix;
 extern crate actix_web;
 extern crate bytes;
+#[macro_use]
+extern crate diesel;
 extern crate env_logger;
 #[macro_use]
 extern crate failure;
@@ -24,6 +26,8 @@ use futures_cpupool::CpuPool;
 use futures_fs::FsPool;
 
 mod error;
+mod models;
+mod schema;
 mod upload;
 
 use self::error::DropmuttError;
