@@ -1,110 +1,70 @@
 extern crate actix;
 extern crate actix_web;
+extern crate bytes;
 extern crate env_logger;
+#[macro_use]
+extern crate failure;
 extern crate futures;
+extern crate futures_cpupool;
 extern crate futures_fs;
 extern crate http as h;
 #[macro_use]
 extern crate log;
 extern crate mime;
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
+extern crate serde_urlencoded;
 
-use actix::*;
-use actix_web::{fs, http, middleware, multipart, server, App, AsyncResponder, Error, HttpMessage,
-                HttpRequest, HttpResponse, State};
-use futures::{Future, Stream, future::{result, Either}};
+use actix_web::{fs, http, middleware, server, App, AsyncResponder, HttpMessage, HttpRequest,
+                HttpResponse, State};
+use futures::{Future, future::{result, Either}};
+use futures_cpupool::CpuPool;
 use futures_fs::FsPool;
-use h::header::CONTENT_DISPOSITION;
+
+mod error;
+mod upload;
+
+use self::error::DropmuttError;
+use self::upload::{handle_multipart, post_kind, MultipartData, PostKind};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TestData {
+    content: String,
+}
 
 #[derive(Clone)]
-struct AppState {
-    fs_pool: FsPool,
+pub struct AppState {
+    fs_pool: FsPool<CpuPool>,
 }
 
 fn upload(
     req: HttpRequest<AppState>,
     state: State<AppState>,
-) -> Box<Future<Item = HttpResponse, Error = Error>> {
-    req.multipart()
-        .from_err()
-        .and_then(move |item| match item {
-            multipart::MultipartItem::Field(field) => {
-                let filename = {
-                    let content_disposition =
-                        if let Some(cd) = field.headers().get(CONTENT_DISPOSITION) {
-                            cd
-                        } else {
-                            return Either::B(result(Ok(())));
-                        };
-
-                    let content_disposition = if let Ok(cd) = content_disposition.to_str() {
-                        cd
-                    } else {
-                        return Either::B(result(Ok(())));
-                    };
-
-                    let filename = content_disposition
-                        .split(';')
-                        .skip(1)
-                        .filter_map(|section| {
-                            let mut parts = section.splitn(2, '=');
-
-                            let key = if let Some(key) = parts.next() {
-                                key.trim()
-                            } else {
-                                return None;
-                            };
-
-                            let val = if let Some(val) = parts.next() {
-                                val.trim()
-                            } else {
-                                return None;
-                            };
-
-                            if key == "filename" {
-                                Some(val)
-                            } else {
-                                None
-                            }
-                        })
-                        .next();
-
-                    if let Some(filename) = filename {
-                        filename.trim_matches('"').to_owned()
-                    } else {
-                        return Either::B(result(Ok(())));
-                    }
-                };
-                info!("CD: {}", filename);
-
-                let path: &std::path::Path = filename.as_ref();
-                let filename = path.file_name().and_then(|filename| filename.to_str());
-
-                let filename = if let Some(filename) = filename {
-                    filename
-                } else {
-                    return Either::B(result(Ok(())));
-                };
-
-                if field.content_type().type_() == mime::IMAGE {
-                    let write = state
-                        .fs_pool
-                        .write(format!("uploads/{}", filename), Default::default());
-                    Either::A(field.map_err(Error::from).forward(write).map(|_| ()))
-                } else {
-                    Either::B(result(Ok(())))
-                }
-            }
-            multipart::MultipartItem::Nested(_) => Either::B(result(Ok(()))),
+) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
+    result(post_kind(&req))
+        .and_then(move |upload_kind| match upload_kind {
+            PostKind::Multipart => Either::A(
+                handle_multipart(req.multipart(), state.fs_pool.clone())
+                    .map(|m: MultipartData<TestData>| {
+                        info!("Responding with {:?}", m);
+                        HttpResponse::Created().json(m)
+                    })
+                    .map_err(|e| {
+                        info!("Responding with Error: {}", e);
+                        e
+                    }),
+            ),
+            PostKind::UrlEncoded => Either::B(result(Err(DropmuttError::ContentType))),
         })
-        .finish()
-        .map(|_| HttpResponse::Ok().into())
         .responder()
 }
 
 fn main() {
-    ::std::env::set_var("RUST_LOG", "actix_web,symon_site=info");
+    ::std::env::set_var("RUST_LOG", "dropmutt_site=info");
     env_logger::init();
-    let sys = actix::System::new("symon-site");
+    let sys = actix::System::new("dropmutt-site");
 
     server::new(|| {
         let state = AppState {
