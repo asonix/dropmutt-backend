@@ -66,14 +66,19 @@ fn main() {
     env_logger::init();
     let sys = actix::System::new("dropmutt-site");
 
-    server::new(|| {
+    let pool = CpuPool::new(20);
+
+    server::new(move || {
         let state = AppState {
-            fs_pool: FsPool::default(),
+            fs_pool: FsPool::from_executor(pool.clone()),
         };
         App::with_state(state)
             .middleware(middleware::Logger::default())
             .resource("/multipart", |r| r.method(http::Method::POST).with2(upload))
-            .handler("/static", fs::StaticFiles::new("static"))
+            .handler(
+                "/static",
+                fs::StaticFiles::with_pool("static", pool.clone()),
+            )
     }).bind("127.0.0.1:8080")
         .unwrap()
         .start();
