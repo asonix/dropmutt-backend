@@ -1,3 +1,5 @@
+use std::string::FromUtf8Error;
+
 use actix_web::{Error, HttpResponse, ResponseError, error::{ContentTypeError, MultipartError}};
 use futures_fs;
 use serde_urlencoded;
@@ -19,6 +21,8 @@ pub enum DropmuttError {
     ContentType,
     #[fail(display = "File uploads must have a filename")]
     Filename,
+    #[fail(display = "Multipart forms must have field names")]
+    Fieldname,
     #[fail(display = "Form too large")]
     FormSize,
     #[fail(display = "Failed to parse form")]
@@ -27,6 +31,8 @@ pub enum DropmuttError {
     FormCount,
     #[fail(display = "Too many files submitted")]
     FileCount,
+    #[fail(display = "Field name contained invalid utf8")]
+    Utf8,
 }
 
 impl From<Error> for DropmuttError {
@@ -59,6 +65,12 @@ impl From<serde_urlencoded::de::Error> for DropmuttError {
     }
 }
 
+impl From<FromUtf8Error> for DropmuttError {
+    fn from(_: FromUtf8Error) -> Self {
+        DropmuttError::Utf8
+    }
+}
+
 impl ResponseError for DropmuttError {
     fn error_response(&self) -> HttpResponse {
         match *self {
@@ -78,6 +90,8 @@ impl ResponseError for DropmuttError {
             | DropmuttError::FileCount
             | DropmuttError::FormSize
             | DropmuttError::UrlEncoded
+            | DropmuttError::Fieldname
+            | DropmuttError::Utf8
             | DropmuttError::Filename => HttpResponse::BadRequest().json(DropmutErrorResponse {
                 errors: vec![format!("{}", self)],
             }),

@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 
 use actix_web::{multipart, HttpMessage, HttpRequest, error::PayloadError};
 use bytes::{Bytes, BytesMut};
@@ -7,114 +8,170 @@ use futures_cpupool::CpuPool;
 use futures_fs::FsPool;
 use h::header::CONTENT_DISPOSITION;
 use mime;
-use serde::de::DeserializeOwned;
-use serde_urlencoded;
 
 use error::DropmuttError;
 use super::AppState;
 
-pub enum MultipartForm<T>
-where
-    T: DeserializeOwned,
-{
-    Form(T),
-    File(PathBuf),
+type MultipartHash = (String, MultipartContent);
+
+#[derive(Debug)]
+pub enum MultipartContent {
+    File { filename: String, metadata: String },
+    Body(String),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct MultipartData<T> {
-    forms: Vec<T>,
-    files: Vec<PathBuf>,
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub enum MultipartForm {
+    Map(HashMap<String, MultipartForm>),
+    Array(Vec<MultipartForm>),
+    String(String),
+    Empty,
 }
 
-impl<T> MultipartData<T>
-where
-    T: DeserializeOwned,
-{
-    pub fn empty() -> Self {
-        MultipartData {
-            forms: vec![],
-            files: vec![],
-        }
-    }
-
+impl MultipartForm {
     pub fn merge(&mut self, other: Self) {
-        self.forms.extend(other.forms);
-        self.files.extend(other.files);
-    }
-}
-
-impl<T> From<MultipartForm<T>> for MultipartData<T>
-where
-    T: DeserializeOwned,
-{
-    fn from(m: MultipartForm<T>) -> Self {
-        match m {
-            MultipartForm::Form(form) => MultipartData {
-                forms: vec![form],
-                files: vec![],
-            },
-            MultipartForm::File(path) => MultipartData {
-                forms: vec![],
-                files: vec![path],
-            },
+        match *self {
+            MultipartForm::Empty => *self = other,
+            MultipartForm::Map(ref mut map) => {
+                if let MultipartForm::Map(other) = other {
+                    other
+                        .into_iter()
+                        .map(|(key, value)| {
+                            if map.contains_key(&key) {
+                                if let Some(m) = map.get_mut(&key) {
+                                    m.merge(value);
+                                }
+                            } else {
+                                map.insert(key, value);
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                }
+            }
+            MultipartForm::Array(ref mut arr) => {
+                if let MultipartForm::Array(other) = other {
+                    arr.extend(other)
+                }
+            }
+            _ => (),
         }
     }
 }
 
-fn handle_file_upload<S, T>(
-    field: multipart::Field<S>,
-    pool: FsPool<CpuPool>,
-) -> impl Future<Item = MultipartForm<T>, Error = DropmuttError>
+pub enum MultipartNamePart {
+    Name(String),
+    Map(String),
+    Array,
+}
+
+fn parse_multipart_name(name: String) -> Result<Vec<MultipartNamePart>, DropmuttError> {
+    name.split('[')
+        .map(|part| {
+            if part.len() == 1 && part.ends_with(']') {
+                MultipartNamePart::Array
+            } else if part.ends_with(']') {
+                MultipartNamePart::Map(part.trim_right_matches(']').to_owned())
+            } else {
+                MultipartNamePart::Name(part.to_owned())
+            }
+        })
+        .fold(Ok(vec![]), |acc, part| match acc {
+            Ok(mut v) => {
+                if let MultipartNamePart::Name(_) = part {
+                    if v.len() > 0 {
+                        return Err(DropmuttError::ContentDisposition);
+                    }
+                }
+
+                v.push(part);
+                Ok(v)
+            }
+            Err(e) => Err(e),
+        })
+}
+
+pub struct ContentDisposition {
+    name: Option<String>,
+    filename: Option<String>,
+}
+
+impl ContentDisposition {
+    fn empty() -> Self {
+        ContentDisposition {
+            name: None,
+            filename: None,
+        }
+    }
+}
+
+fn parse_content_disposition<S>(
+    field: &multipart::Field<S>,
+) -> Result<ContentDisposition, DropmuttError>
 where
     S: Stream<Item = Bytes, Error = PayloadError>,
-    T: DeserializeOwned,
 {
-    info!("File upload: {:?}", field);
-    let filename = {
-        let content_disposition = if let Some(cd) = field.headers().get(CONTENT_DISPOSITION) {
-            cd
-        } else {
-            return Either::B(result(Err(DropmuttError::ContentDisposition)));
-        };
+    let content_disposition = if let Some(cd) = field.headers().get(CONTENT_DISPOSITION) {
+        cd
+    } else {
+        return Err(DropmuttError::ContentDisposition);
+    };
 
-        let content_disposition = if let Ok(cd) = content_disposition.to_str() {
-            cd
-        } else {
-            return Either::B(result(Err(DropmuttError::ContentDisposition)));
-        };
+    let content_disposition = if let Ok(cd) = content_disposition.to_str() {
+        cd
+    } else {
+        return Err(DropmuttError::ContentDisposition);
+    };
 
-        let filename = content_disposition
-            .split(';')
-            .skip(1)
-            .filter_map(|section| {
-                let mut parts = section.splitn(2, '=');
+    Ok(content_disposition
+        .split(';')
+        .skip(1)
+        .filter_map(|section| {
+            let mut parts = section.splitn(2, '=');
 
-                let key = if let Some(key) = parts.next() {
-                    key.trim()
-                } else {
-                    return None;
-                };
+            let key = if let Some(key) = parts.next() {
+                key.trim()
+            } else {
+                return None;
+            };
 
-                let val = if let Some(val) = parts.next() {
-                    val.trim()
-                } else {
-                    return None;
-                };
+            let val = if let Some(val) = parts.next() {
+                val.trim()
+            } else {
+                return None;
+            };
 
-                if key == "filename" {
-                    Some(val)
-                } else {
-                    None
-                }
-            })
-            .next();
+            Some((key, val.trim_matches('"')))
+        })
+        .fold(ContentDisposition::empty(), |mut acc, (key, val)| {
+            if key == "name" {
+                acc.name = Some(val.to_owned());
+            } else if key == "filename" {
+                acc.filename = Some(val.to_owned());
+            }
+            acc
+        }))
+}
 
-        if let Some(filename) = filename {
-            filename.trim_matches('"').to_owned()
-        } else {
-            return Either::B(result(Err(DropmuttError::Filename)));
-        }
+fn handle_file_upload<S>(
+    field: multipart::Field<S>,
+    pool: FsPool<CpuPool>,
+) -> impl Future<Item = MultipartHash, Error = DropmuttError>
+where
+    S: Stream<Item = Bytes, Error = PayloadError>,
+{
+    let content_disposition = match parse_content_disposition(&field) {
+        Ok(cd) => cd,
+        Err(e) => return Either::B(result(Err(e))),
+    };
+
+    let filename = match content_disposition.filename {
+        Some(filename) => filename,
+        None => return Either::B(result(Err(DropmuttError::Filename))),
+    };
+
+    let name = match content_disposition.name {
+        Some(name) => name,
+        None => return Either::B(result(Err(DropmuttError::Fieldname))),
     };
 
     let path: &Path = filename.as_ref();
@@ -135,93 +192,168 @@ where
         field
             .map_err(DropmuttError::from)
             .forward(write)
-            .map(move |_| MultipartForm::File(filename.into())),
+            .map(move |_| {
+                (
+                    name,
+                    MultipartContent::File {
+                        filename,
+                        metadata: "".to_owned(),
+                    },
+                )
+            }),
     )
 }
 
-fn handle_form<S, T>(
+fn handle_form_data<S>(
     field: multipart::Field<S>,
-) -> impl Future<Item = MultipartForm<T>, Error = DropmuttError>
+) -> impl Future<Item = MultipartHash, Error = DropmuttError>
 where
     S: Stream<Item = Bytes, Error = PayloadError>,
-    T: DeserializeOwned,
 {
-    let form_size_limit = 80000;
-    field
-        .from_err()
-        .fold((BytesMut::new(), 0), move |(mut acc, count), bytes| {
-            let count = count + bytes.len();
+    let content_disposition = match parse_content_disposition(&field) {
+        Ok(cd) => cd,
+        Err(e) => return Either::B(result(Err(e))),
+    };
 
-            if count < form_size_limit {
-                acc.extend_from_slice(&bytes);
-                Ok((acc, count))
-            } else {
-                Err(DropmuttError::FormSize)
-            }
-        })
-        .and_then(|(full_bytes, _)| {
-            serde_urlencoded::from_bytes(&full_bytes)
-                .map_err(From::from)
-                .map(MultipartForm::Form)
-        })
+    let name = match content_disposition.name {
+        Some(name) => name,
+        None => return Either::B(result(Err(DropmuttError::Fieldname))),
+    };
+
+    let max_body_size = 80000;
+
+    Either::A(
+        field
+            .from_err()
+            .fold(BytesMut::new(), move |mut acc, bytes| {
+                if acc.len() + bytes.len() < max_body_size {
+                    acc.extend(bytes);
+                    Ok(acc)
+                } else {
+                    Err(DropmuttError::FormSize)
+                }
+            })
+            .and_then(|bytes| {
+                String::from_utf8(bytes.to_vec())
+                    .map(|string| (name, MultipartContent::Body(string)))
+                    .map_err(From::from)
+            }),
+    )
 }
 
-fn handle_multipart_field<S, T>(
+fn handle_multipart_field<S>(
     field: multipart::Field<S>,
     pool: FsPool<CpuPool>,
-) -> impl Future<Item = MultipartForm<T>, Error = DropmuttError>
+) -> impl Future<Item = MultipartHash, Error = DropmuttError>
 where
     S: Stream<Item = Bytes, Error = PayloadError>,
-    T: DeserializeOwned,
 {
     let content_type = field.content_type().clone();
 
     if content_type == mime::APPLICATION_OCTET_STREAM || content_type.type_() == mime::IMAGE {
         Either::A(Either::A(handle_file_upload(field, pool)))
-    } else if content_type == mime::APPLICATION_WWW_FORM_URLENCODED {
-        Either::A(Either::B(handle_form(field)))
+    } else if content_type == mime::MULTIPART_FORM_DATA {
+        Either::A(Either::B(handle_form_data(field)))
     } else {
         Either::B(result(Err(DropmuttError::ContentType)))
     }
 }
 
-pub fn handle_multipart<S, T>(
+pub fn handle_multipart<S>(
     m: multipart::Multipart<S>,
     pool: FsPool<CpuPool>,
-) -> Box<Future<Item = MultipartData<T>, Error = DropmuttError>>
+) -> Box<Stream<Item = MultipartHash, Error = DropmuttError>>
 where
     S: Stream<Item = Bytes, Error = PayloadError> + 'static,
-    T: DeserializeOwned + 'static,
+{
+    Box::new(
+        m.map_err(DropmuttError::from)
+            .map(move |item| match item {
+                multipart::MultipartItem::Field(field) => Box::new(
+                    handle_multipart_field(field, pool.clone())
+                        .map(From::from)
+                        .into_stream(),
+                )
+                    as Box<Stream<Item = MultipartHash, Error = DropmuttError>>,
+                multipart::MultipartItem::Nested(m) => Box::new(handle_multipart(m, pool.clone()))
+                    as Box<Stream<Item = MultipartHash, Error = DropmuttError>>,
+            })
+            .flatten(),
+    )
+}
+
+pub fn do_multipart_handling<S>(
+    m: multipart::Multipart<S>,
+    pool: FsPool<CpuPool>,
+) -> impl Future<Item = MultipartForm, Error = DropmuttError>
+where
+    S: Stream<Item = Bytes, Error = PayloadError> + 'static,
 {
     let max_files = 10;
-    let max_forms = 100;
+    let max_fields = 100;
 
-    Box::new(
-        m.from_err()
-            .and_then(move |item| match item {
-                multipart::MultipartItem::Field(field) => {
-                    Either::A(handle_multipart_field(field, pool.clone()).map(From::from))
-                }
-                multipart::MultipartItem::Nested(m) => Either::B(handle_multipart(m, pool.clone())),
-            })
-            .fold(
-                (MultipartData::empty(), 0, 0),
-                move |(mut acc, file_count, form_count), data| {
-                    let file_count = file_count + data.files.len();
-                    let form_count = form_count + data.forms.len();
+    handle_multipart(m, pool)
+        .fold(
+            (Vec::new(), 0, 0),
+            move |(mut acc, file_count, field_count), (name, content)| match content {
+                MultipartContent::File { filename, metadata } => {
+                    let _ = metadata;
+                    let file_count = file_count + 1;
 
-                    if file_count < max_files && form_count < max_forms {
-                        acc.merge(data);
-                        Ok((acc, file_count, form_count))
-                    } else if file_count > max_files {
+                    if file_count < max_files {
+                        parse_multipart_name(name).map(|name| {
+                            acc.push((name, filename));
+
+                            (acc, file_count + 1, field_count)
+                        })
+                    } else {
                         Err(DropmuttError::FileCount)
+                    }
+                }
+                MultipartContent::Body(body) => {
+                    let field_count = field_count + 1;
+
+                    if field_count < max_fields {
+                        parse_multipart_name(name).map(|name| {
+                            acc.push((name, body));
+
+                            (acc, file_count, field_count + 1)
+                        })
                     } else {
                         Err(DropmuttError::FormCount)
                     }
-                },
-            )
-            .map(|(data, _, _)| data),
-    )
+                }
+            },
+        )
+        .map(|(v, _, _)| {
+            v.into_iter()
+                .fold(MultipartForm::Empty, |mut acc, (mut name, value)| {
+                    name.reverse();
+
+                    acc.merge(
+                        name.into_iter()
+                            .fold(MultipartForm::Empty, move |acc, part| {
+                                let item = if acc == MultipartForm::Empty {
+                                    MultipartForm::String(value.clone())
+                                } else {
+                                    acc
+                                };
+
+                                match part {
+                                    MultipartNamePart::Array => MultipartForm::Array(vec![item]),
+                                    MultipartNamePart::Map(name)
+                                    | MultipartNamePart::Name(name) => MultipartForm::Map({
+                                        let mut m = HashMap::new();
+                                        m.insert(name, item);
+                                        m
+                                    }),
+                                }
+                            }),
+                    );
+
+                    acc
+                })
+        })
 }
 
 pub enum PostKind {

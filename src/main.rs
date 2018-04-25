@@ -27,7 +27,7 @@ mod error;
 mod upload;
 
 use self::error::DropmuttError;
-use self::upload::{handle_multipart, post_kind, MultipartData, PostKind};
+use self::upload::{do_multipart_handling, post_kind, MultipartForm, PostKind};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TestData {
@@ -46,8 +46,8 @@ fn upload(
     result(post_kind(&req))
         .and_then(move |upload_kind| match upload_kind {
             PostKind::Multipart => Either::A(
-                handle_multipart(req.multipart(), state.fs_pool.clone())
-                    .map(|m: MultipartData<TestData>| {
+                do_multipart_handling(req.multipart(), state.fs_pool.clone())
+                    .map(|m: MultipartForm| {
                         info!("Responding with {:?}", m);
                         HttpResponse::Created().json(m)
                     })
