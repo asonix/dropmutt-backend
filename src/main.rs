@@ -25,9 +25,9 @@ extern crate serde_urlencoded;
 use std::env;
 
 use actix::prelude::*;
-use actix_web::{fs, http, server, App, AsyncResponder, Form, HttpMessage, HttpRequest,
-                HttpResponse, State,
-                middleware::{self,
+use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest, HttpResponse,
+                Json, State,
+                middleware::{self, cors::Cors,
                              identity::{CookieIdentityPolicy, IdentityService, RequestIdentity}}};
 use diesel::{pg::PgConnection, r2d2::{ConnectionManager, Pool}};
 use dotenv::dotenv;
@@ -45,8 +45,8 @@ use self::error::DropmuttError;
 use self::upload::{do_multipart_handling, post_kind, MultipartForm, PostKind};
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct TestData {
-    content: String,
+pub struct Success {
+    message: String,
 }
 
 #[derive(Clone)]
@@ -94,9 +94,10 @@ struct AuthForm {
 
 fn login(
     mut req: HttpRequest<AppState>,
-    form: Form<AuthForm>,
+    form: Json<AuthForm>,
     state: State<AppState>,
 ) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
+    info!("login");
     let form = form.into_inner();
 
     let pool = state.pool.clone();
@@ -115,16 +116,19 @@ fn login(
         .map(move |user| {
             req.remember(user.token_str());
 
-            HttpResponse::Ok().finish()
+            HttpResponse::Ok().json(Success {
+                message: "Logged in!".to_owned(),
+            })
         })
         .responder()
 }
 
 fn signup(
     mut req: HttpRequest<AppState>,
-    form: Form<AuthForm>,
+    form: Json<AuthForm>,
     state: State<AppState>,
 ) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
+    info!("signup");
     let form = form.into_inner();
 
     result(if state.signup_enabled {
@@ -145,10 +149,21 @@ fn signup(
             .map(move |user| {
                 req.remember(user.token_str());
 
-                HttpResponse::Ok().finish()
+                HttpResponse::Created().json(Success {
+                    message: "Created account!".to_owned(),
+                })
             })
     })
         .responder()
+}
+
+fn logout(mut req: HttpRequest<AppState>) -> HttpResponse {
+    info!("logout");
+    req.forget();
+
+    HttpResponse::Ok().json(Success {
+        message: "Logged out!".to_owned(),
+    })
 }
 
 fn prepare_connection() -> Pool<ConnectionManager<PgConnection>> {
@@ -158,12 +173,6 @@ fn prepare_connection() -> Pool<ConnectionManager<PgConnection>> {
 
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     r2d2::Pool::builder().build(manager).unwrap()
-}
-
-fn logout(mut req: HttpRequest<AppState>) -> HttpResponse {
-    req.forget();
-
-    HttpResponse::Ok().finish()
 }
 
 fn main() {
@@ -188,22 +197,27 @@ fn main() {
                     .name("auth-cookie")
                     .secure(true),
             ))
-            .resource("/api/v1/upload", |r| {
-                r.method(http::Method::POST).with2(upload)
+            .configure(|app| {
+                Cors::for_app(app)
+                    .allowed_origin("http://localhost:8000")
+                    .resource("/api/v1/upload", |r| {
+                        r.method(http::Method::POST).with2(upload)
+                    })
+                    .resource("/api/v1/login", |r| {
+                        r.method(http::Method::POST).with3(login)
+                    })
+                    .resource("/api/v1/signup", |r| {
+                        r.method(http::Method::POST).with3(signup)
+                    })
+                    .resource("/api/v1/logout", |r| {
+                        r.method(http::Method::GET).with(logout)
+                    })
+                    .register()
+                    .handler(
+                        "/static",
+                        fs::StaticFiles::with_pool("static", pool.clone()),
+                    )
             })
-            .resource("/api/v1/login", |r| {
-                r.method(http::Method::POST).with3(login)
-            })
-            .resource("/api/v1/signup", |r| {
-                r.method(http::Method::POST).with3(signup)
-            })
-            .resource("/api/v1/logout", |r| {
-                r.method(http::Method::GET).with(logout)
-            })
-            .handler(
-                "/static",
-                fs::StaticFiles::with_pool("static", pool.clone()),
-            )
     }).bind("127.0.0.1:8080")
         .unwrap()
         .start();

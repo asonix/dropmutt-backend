@@ -87,7 +87,7 @@ impl NewUser {
         })
     }
 
-    pub fn create(self, conn: &PgConnection) -> Result<User, DropmuttError> {
+    pub fn create(self, conn: &PgConnection) -> Result<QueriedUser, DropmuttError> {
         use diesel::*;
 
         diesel::insert_into(users::table)
@@ -95,7 +95,6 @@ impl NewUser {
             .returning((users::dsl::id, users::dsl::username, users::dsl::password))
             .get_result(conn)
             .map_err(From::from)
-            .and_then(|user: QueriedUser| user.verify(&self.password))
     }
 }
 

@@ -127,9 +127,14 @@ impl ResponseError for DropmuttError {
                 })
             }
             DropmuttError::Diesel(ref e) => {
-                HttpResponse::InternalServerError().json(DropmutErrorResponse {
+                let body = DropmutErrorResponse {
                     errors: vec![format!("{}", e)],
-                })
+                };
+
+                match *e {
+                    diesel::result::Error::NotFound => HttpResponse::NotFound().json(body),
+                    _ => HttpResponse::InternalServerError().json(body),
+                }
             }
             DropmuttError::R2d2(ref e) => {
                 HttpResponse::InternalServerError().json(DropmutErrorResponse {

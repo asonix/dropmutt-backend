@@ -23,7 +23,9 @@ impl Handler<CreateUser> for DbActor {
     type Result = Result<models::User, DropmuttError>;
 
     fn handle(&mut self, msg: CreateUser, _: &mut Self::Context) -> Self::Result {
-        models::NewUser::new(msg.username, msg.password)?.create(&*self.conn.get()?)
+        models::NewUser::new(msg.username.clone(), msg.password.clone())?
+            .create(&*self.conn.get()?)
+            .and_then(move |user| user.verify(&msg.password))
     }
 }
 
