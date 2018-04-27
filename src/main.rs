@@ -51,6 +51,7 @@ pub struct Success {
 
 #[derive(Clone)]
 pub struct AppState {
+    app_path: String,
     db: Addr<Syn, db::DbActor>,
     pool: CpuPool,
     signup_enabled: bool,
@@ -158,12 +159,28 @@ fn signup(
 }
 
 fn logout(mut req: HttpRequest<AppState>) -> HttpResponse {
-    info!("logout");
+    info!("logout user {:?}", req.identity());
     req.forget();
 
     HttpResponse::Ok().json(Success {
         message: "Logged out!".to_owned(),
     })
+}
+
+fn check_auth(req: HttpRequest<AppState>) -> Result<HttpResponse, DropmuttError> {
+    req.identity()
+        .map(|_| {
+            HttpResponse::Ok().json(Success {
+                message: "Yup!".to_owned(),
+            })
+        })
+        .ok_or(DropmuttError::Auth)
+}
+
+fn serve_app(state: State<AppState>) -> Result<fs::NamedFile, DropmuttError> {
+    fs::NamedFile::open(&state.app_path)
+        .map(|nf| nf.set_cpu_pool(state.pool.clone()))
+        .map_err(From::from)
 }
 
 fn prepare_connection() -> Pool<ConnectionManager<PgConnection>> {
@@ -186,6 +203,7 @@ fn main() {
 
     server::new(move || {
         let state = AppState {
+            app_path: "static/index.html".to_owned(),
             pool: pool.clone(),
             db: db.clone(),
             signup_enabled: true,
@@ -195,11 +213,12 @@ fn main() {
             .middleware(IdentityService::new(
                 CookieIdentityPolicy::new(&[0; 80])
                     .name("auth-cookie")
-                    .secure(true),
+                    .secure(false),
             ))
             .configure(|app| {
                 Cors::for_app(app)
                     .allowed_origin("http://localhost:8000")
+                    .supports_credentials()
                     .resource("/api/v1/upload", |r| {
                         r.method(http::Method::POST).with2(upload)
                     })
@@ -210,14 +229,18 @@ fn main() {
                         r.method(http::Method::POST).with3(signup)
                     })
                     .resource("/api/v1/logout", |r| {
-                        r.method(http::Method::GET).with(logout)
+                        r.method(http::Method::DELETE).with(logout)
+                    })
+                    .resource("/api/v1/check-auth", |r| {
+                        r.method(http::Method::GET).with(check_auth)
                     })
                     .register()
-                    .handler(
-                        "/static",
-                        fs::StaticFiles::with_pool("static", pool.clone()),
-                    )
             })
+            .resource("/", |r| r.method(http::Method::GET).with(serve_app))
+            .handler(
+                "/static",
+                fs::StaticFiles::with_pool("static", pool.clone()),
+            )
     }).bind("127.0.0.1:8080")
         .unwrap()
         .start();

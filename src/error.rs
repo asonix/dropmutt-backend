@@ -1,3 +1,4 @@
+use std::io;
 use std::string::FromUtf8Error;
 
 use actix::MailboxError;
@@ -23,6 +24,8 @@ pub enum DropmuttError {
     Diesel(#[cause] diesel::result::Error),
     #[fail(display = "Error in r2d2, {}", _0)]
     R2d2(#[cause] r2d2::Error),
+    #[fail(display = "Error serving file, {}", _0)]
+    IO(#[cause] io::Error),
     #[fail(display = "File upload is missing Content-Disposition header")]
     ContentDisposition,
     #[fail(display = "Request was made with bad Content-Type header")]
@@ -113,6 +116,12 @@ impl From<r2d2::Error> for DropmuttError {
     }
 }
 
+impl From<io::Error> for DropmuttError {
+    fn from(e: io::Error) -> Self {
+        DropmuttError::IO(e)
+    }
+}
+
 impl ResponseError for DropmuttError {
     fn error_response(&self) -> HttpResponse {
         match *self {
@@ -137,6 +146,11 @@ impl ResponseError for DropmuttError {
                 }
             }
             DropmuttError::R2d2(ref e) => {
+                HttpResponse::InternalServerError().json(DropmutErrorResponse {
+                    errors: vec![format!("{}", e)],
+                })
+            }
+            DropmuttError::IO(ref e) => {
                 HttpResponse::InternalServerError().json(DropmutErrorResponse {
                     errors: vec![format!("{}", e)],
                 })

@@ -255,6 +255,7 @@ where
     } else if content_type == mime::MULTIPART_FORM_DATA {
         Either::A(Either::B(handle_form_data(field)))
     } else {
+        warn!("Bad Content-Type header: {}", content_type);
         Either::B(result(Err(DropmuttError::ContentType)))
     }
 }
@@ -369,9 +370,13 @@ pub fn post_kind(req: &HttpRequest<AppState>) -> Result<PostKind, DropmuttError>
             } else if mime_type == mime::APPLICATION_WWW_FORM_URLENCODED {
                 Ok(PostKind::UrlEncoded)
             } else {
+                warn!("Bad post kind: {}", mime_type);
                 Err(DropmuttError::ContentType)
             }
         }
-        None => Err(DropmuttError::ContentType),
+        None => {
+            warn!("No mime_type on request");
+            Err(DropmuttError::ContentType)
+        }
     }
 }
