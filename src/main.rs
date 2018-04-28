@@ -29,7 +29,7 @@ use std::env;
 
 use actix::prelude::*;
 use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest, HttpResponse,
-                Json, State,
+                Json, Query, State,
                 middleware::{self, cors::Cors,
                              identity::{CookieIdentityPolicy, IdentityService, RequestIdentity}}};
 use diesel::{pg::PgConnection, r2d2::{ConnectionManager, Pool}};
@@ -245,6 +245,32 @@ fn serve_app(state: State<AppState>) -> Result<fs::NamedFile, DropmuttError> {
         .map_err(From::from)
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ImageQuery {
+    count: i64,
+    id: Option<i32>,
+}
+
+fn fetch_images(
+    query: Query<ImageQuery>,
+    state: State<AppState>,
+) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
+    let q = query.into_inner();
+    state
+        .db
+        .send(db::FetchImages {
+            count: q.count,
+            before_id: q.id,
+        })
+        .then(|res| match res {
+            Ok(res) => res,
+            Err(e) => Err(e.into()),
+        })
+        .map(|images| HttpResponse::Ok().json(images))
+        .from_err()
+        .responder()
+}
+
 fn prepare_connection() -> Pool<ConnectionManager<PgConnection>> {
     dotenv().ok();
 
@@ -300,12 +326,19 @@ fn main() {
                     .resource("/api/v1/check-auth", |r| {
                         r.method(http::Method::GET).with(check_auth)
                     })
+                    .resource("/api/v1/images", |r| {
+                        r.method(http::Method::GET).with2(fetch_images)
+                    })
                     .register()
             })
             .resource("/", |r| r.method(http::Method::GET).with(serve_app))
             .handler(
                 "/static",
                 fs::StaticFiles::with_pool("static", pool.clone()),
+            )
+            .handler(
+                "/uploads",
+                fs::StaticFiles::with_pool("uploads", pool.clone()),
             )
     }).bind("127.0.0.1:8080")
         .unwrap()

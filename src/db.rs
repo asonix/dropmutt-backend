@@ -67,7 +67,7 @@ fn store_path(path: PathBuf, conn: &PgConnection) -> Result<models::File, Dropmu
 }
 
 impl Handler<StoreProcessedImage> for DbActor {
-    type Result = Result<(models::Image, Vec<models::File>), DropmuttError>;
+    type Result = Result<models::Image, DropmuttError>;
 
     fn handle(&mut self, msg: StoreProcessedImage, _: &mut Self::Context) -> Self::Result {
         use diesel::Connection;
@@ -76,38 +76,46 @@ impl Handler<StoreProcessedImage> for DbActor {
 
         conn.transaction(|| {
             let user = models::User::by_token(&msg.0, conn)?;
-            let file_200 = store_path(msg.1.path_200, conn)?;
-            let file_400 = store_path(msg.1.path_400, conn)?;
-            let file_800 = if let Some(path_800) = msg.1.path_800 {
-                Some(store_path(path_800, conn)?)
-            } else {
-                None
-            };
-            let file_1200 = if let Some(path_1200) = msg.1.path_1200 {
-                Some(store_path(path_1200, conn)?)
-            } else {
-                None
-            };
-            let file_full = store_path(msg.1.path_full, conn)?;
 
-            models::NewImage::new(
-                &user,
-                &file_200,
-                &file_400,
-                file_800.as_ref(),
-                file_1200.as_ref(),
-                &file_full,
-                msg.1.width,
-                msg.1.height,
-            ).insert(conn)
-                .map(|image| {
-                    let mut v = vec![file_200, file_400, file_full];
-                    v.extend(file_800);
-                    v.extend(file_1200);
+            let files = msg.1.files.into_iter().fold(
+                Ok(Vec::new()) as Result<Vec<_>, DropmuttError>,
+                |acc, (path, width, height)| match acc {
+                    Ok(mut acc) => {
+                        acc.push((store_path(path, conn)?, width, height));
 
-                    (image, v)
-                })
+                        Ok(acc)
+                    }
+                    Err(e) => Err(e),
+                },
+            )?;
+
+            let image = models::NewImage::new(&user).insert(conn)?;
+
+            files.iter().fold(
+                Ok(image) as Result<_, DropmuttError>,
+                |acc, (file, width, height)| match acc {
+                    Ok(image) => {
+                        models::NewImageFile::new(&image, file, *width, *height).insert(conn)?;
+
+                        Ok(image)
+                    }
+                    Err(e) => Err(e),
+                },
+            )
         })
+    }
+}
+
+impl Handler<FetchImages> for DbActor {
+    type Result = Result<Vec<models::ImageWithFiles>, DropmuttError>;
+
+    fn handle(&mut self, msg: FetchImages, _: &mut Self::Context) -> Self::Result {
+        let conn: &PgConnection = &*self.conn.get()?;
+
+        match msg.before_id {
+            Some(id) => models::ImageWithFiles::before_id(msg.count, id, conn),
+            None => models::ImageWithFiles::recent(msg.count, conn),
+        }
     }
 }
 
@@ -135,5 +143,14 @@ impl Message for StoreImage {
 pub struct StoreProcessedImage(pub String, pub ProcessResponse);
 
 impl Message for StoreProcessedImage {
-    type Result = Result<(models::Image, Vec<models::File>), DropmuttError>;
+    type Result = Result<models::Image, DropmuttError>;
+}
+
+pub struct FetchImages {
+    pub count: i64,
+    pub before_id: Option<i32>,
+}
+
+impl Message for FetchImages {
+    type Result = Result<Vec<models::ImageWithFiles>, DropmuttError>;
 }

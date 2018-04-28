@@ -1,22 +1,126 @@
+use std::collections::BTreeMap;
+
 use diesel;
 use diesel::pg::PgConnection;
 
 use error::DropmuttError;
 use schema::images;
-use super::{File, User};
+use super::User;
+
+#[derive(Debug, Deserialize, Queryable, Serialize)]
+pub struct FilesWithSizes {
+    path: String,
+    width: i32,
+    height: i32,
+}
+
+#[derive(Debug, Deserialize, Queryable, Serialize)]
+pub struct ImageWithFiles {
+    id: i32,
+    files: Vec<FilesWithSizes>,
+}
+
+impl ImageWithFiles {
+    pub fn recent(count: i64, conn: &PgConnection) -> Result<Vec<ImageWithFiles>, DropmuttError> {
+        use schema::files;
+        use schema::image_files;
+        use diesel::prelude::*;
+
+        let image_ids = images::table
+            .select(images::dsl::id)
+            .order(images::dsl::id.desc())
+            .limit(count.min(30));
+
+        image_files::table
+            .inner_join(files::table)
+            .filter(image_files::dsl::image_id.eq_any(image_ids))
+            .select((
+                image_files::dsl::image_id,
+                image_files::dsl::width,
+                image_files::dsl::height,
+                files::dsl::file_path,
+            ))
+            .get_results(conn)
+            .map(|results| {
+                let mut v: Vec<_> = results
+                    .into_iter()
+                    .fold(BTreeMap::new(), |mut acc, (id, width, height, path)| {
+                        {
+                            let entry = acc.entry(id).or_insert(Vec::new());
+
+                            entry.push(FilesWithSizes {
+                                path,
+                                width,
+                                height,
+                            });
+                        }
+                        acc
+                    })
+                    .into_iter()
+                    .map(|(id, files)| ImageWithFiles { id, files })
+                    .collect();
+
+                v.reverse();
+                v
+            })
+            .map_err(From::from)
+    }
+
+    pub fn before_id(
+        count: i64,
+        id: i32,
+        conn: &PgConnection,
+    ) -> Result<Vec<ImageWithFiles>, DropmuttError> {
+        use schema::files;
+        use schema::image_files;
+        use diesel::prelude::*;
+
+        let image_ids = images::table
+            .filter(images::dsl::id.lt(id))
+            .select(images::dsl::id)
+            .order(images::dsl::id.desc())
+            .limit(count.min(30));
+
+        image_files::table
+            .inner_join(files::table)
+            .filter(image_files::dsl::image_id.eq_any(image_ids))
+            .select((
+                image_files::dsl::image_id,
+                image_files::dsl::width,
+                image_files::dsl::height,
+                files::dsl::file_path,
+            ))
+            .get_results(conn)
+            .map(|results| {
+                let mut v: Vec<_> = results
+                    .into_iter()
+                    .fold(BTreeMap::new(), |mut acc, (id, width, height, path)| {
+                        {
+                            let entry = acc.entry(id).or_insert(Vec::new());
+
+                            entry.push(FilesWithSizes {
+                                path,
+                                width,
+                                height,
+                            });
+                        }
+                        acc
+                    })
+                    .into_iter()
+                    .map(|(id, files)| ImageWithFiles { id, files })
+                    .collect();
+
+                v.reverse();
+                v
+            })
+            .map_err(From::from)
+    }
+}
 
 #[derive(Queryable)]
 pub struct Image {
     id: i32,
     uploaded_by: i32,
-    size_200: i32,
-    size_400: i32,
-    size_800: Option<i32>,
-    size_1200: Option<i32>,
-    size_full: i32,
-    width: i32,
-    height: i32,
-    ratio: f32,
 }
 
 impl Image {
@@ -27,75 +131,18 @@ impl Image {
     pub fn uploaded_by(&self) -> i32 {
         self.uploaded_by
     }
-
-    pub fn size_200(&self) -> i32 {
-        self.size_200
-    }
-
-    pub fn size_400(&self) -> i32 {
-        self.size_400
-    }
-
-    pub fn size_800(&self) -> Option<i32> {
-        self.size_800
-    }
-
-    pub fn size_1200(&self) -> Option<i32> {
-        self.size_1200
-    }
-
-    pub fn size_full(&self) -> i32 {
-        self.size_full
-    }
-
-    pub fn width(&self) -> i32 {
-        self.width
-    }
-
-    pub fn height(&self) -> i32 {
-        self.height
-    }
-
-    pub fn ratio(&self) -> f32 {
-        self.ratio
-    }
 }
 
 #[derive(Insertable)]
 #[table_name = "images"]
 pub struct NewImage {
     uploaded_by: i32,
-    size_200: i32,
-    size_400: i32,
-    size_800: Option<i32>,
-    size_1200: Option<i32>,
-    size_full: i32,
-    width: i32,
-    height: i32,
-    ratio: f32,
 }
 
 impl NewImage {
-    pub fn new(
-        user: &User,
-        size_200: &File,
-        size_400: &File,
-        size_800: Option<&File>,
-        size_1200: Option<&File>,
-        size_full: &File,
-        width: i32,
-        height: i32,
-    ) -> Self {
+    pub fn new(user: &User) -> Self {
         NewImage {
             uploaded_by: user.id(),
-            size_200: size_200.id(),
-            size_400: size_400.id(),
-            size_800: size_800.map(File::id),
-            size_1200: size_1200.map(File::id),
-            size_full: size_full.id(),
-            width,
-            height,
-            ratio: (width as f32) / (height as f32),
         }
     }
 
@@ -104,18 +151,7 @@ impl NewImage {
 
         diesel::insert_into(images::table)
             .values(&self)
-            .returning((
-                images::dsl::id,
-                images::dsl::uploaded_by,
-                images::dsl::size_200,
-                images::dsl::size_400,
-                images::dsl::size_800,
-                images::dsl::size_1200,
-                images::dsl::size_full,
-                images::dsl::width,
-                images::dsl::height,
-                images::dsl::ratio,
-            ))
+            .returning((images::dsl::id, images::dsl::uploaded_by))
             .get_result(conn)
             .map_err(From::from)
     }

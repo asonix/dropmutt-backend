@@ -64,15 +64,17 @@ fn resize_image(
     width: u32,
     filename: &str,
     directory: &Path,
-) -> Result<PathBuf, DropmuttError> {
+) -> Result<(PathBuf, i32, i32), DropmuttError> {
     let img = img.thumbnail(width, 10_000_000);
 
     let path = image_path(filename, &format!("{}", width), directory, false);
 
+    let rgba_img = img.to_rgba();
+
     info!("Saving image: {:?}", path);
     img.save(&path)?;
 
-    Ok(path)
+    Ok((path, rgba_img.width() as i32, rgba_img.height() as i32))
 }
 
 impl Handler<ProcessImage> for ImageProcessor {
@@ -95,32 +97,25 @@ impl Handler<ProcessImage> for ImageProcessor {
         let width = rgbaimg.width() as i32;
         let height = rgbaimg.height() as i32;
 
-        let path_200 = resize_image(&img, 200, &filename, &directory)?;
-        let path_400 = resize_image(&img, 400, &filename, &directory)?;
-        let path_800 = if width > 800 {
-            Some(resize_image(&img, 800, &filename, &directory)?)
-        } else {
-            None
-        };
-        let path_1200 = if width > 1200 {
-            Some(resize_image(&img, 1200, &filename, &directory)?)
-        } else {
-            None
-        };
+        let mut files = Vec::new();
+
+        files.push(resize_image(&img, 200, &filename, &directory)?);
+        files.push(resize_image(&img, 400, &filename, &directory)?);
+
+        if width > 800 {
+            files.push(resize_image(&img, 800, &filename, &directory)?);
+        }
+
+        if width > 1200 {
+            files.push(resize_image(&img, 1200, &filename, &directory)?);
+        }
 
         let path_full = image_path(&filename, "full", &directory, true);
         info!("Saving image: {:?}", path_full);
         img.save(&path_full)?;
+        files.push((path_full, width, height));
 
-        Ok(ProcessResponse {
-            path_200,
-            path_400,
-            path_800,
-            path_1200,
-            path_full,
-            width,
-            height,
-        })
+        Ok(ProcessResponse { files })
     }
 }
 
@@ -130,12 +125,8 @@ impl Message for ProcessImage {
     type Result = Result<ProcessResponse, DropmuttError>;
 }
 
+pub type PreFile = (PathBuf, i32, i32);
+
 pub struct ProcessResponse {
-    pub path_200: PathBuf,
-    pub path_400: PathBuf,
-    pub path_800: Option<PathBuf>,
-    pub path_1200: Option<PathBuf>,
-    pub path_full: PathBuf,
-    pub width: i32,
-    pub height: i32,
+    pub files: Vec<PreFile>,
 }
