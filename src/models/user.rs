@@ -13,8 +13,32 @@ pub struct User {
 }
 
 impl User {
+    pub fn id(&self) -> i32 {
+        self.id
+    }
+
     pub fn token_str(&self) -> String {
         format!("{}#{}", self.username, self.id)
+    }
+
+    pub fn by_token(token: &str, conn: &PgConnection) -> Result<Self, DropmuttError> {
+        let index = token.rfind('#').ok_or(DropmuttError::Login)?;
+
+        let (uname, id) = token.split_at(index);
+        let id: i32 = id.trim_left_matches('#')
+            .parse()
+            .map_err(|_| DropmuttError::Login)?;
+
+        let user = QueriedUser::by_username(uname, conn)?;
+
+        if user.id == id {
+            Ok(User {
+                id: user.id,
+                username: user.username,
+            })
+        } else {
+            Err(DropmuttError::Login)
+        }
     }
 }
 

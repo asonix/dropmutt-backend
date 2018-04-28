@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::{fs::DirBuilder, os::unix::fs::DirBuilderExt, path::{Path, PathBuf}};
 
 use actix_web::{multipart, HttpMessage, HttpRequest, error::PayloadError};
 use bytes::{Bytes, BytesMut};
@@ -8,61 +7,31 @@ use futures_cpupool::CpuPool;
 use futures_fs::FsPool;
 use h::header::CONTENT_DISPOSITION;
 use mime;
+use mime_guess;
 
 use error::DropmuttError;
+use path_generator::PathGenerator;
 use super::AppState;
 
 type MultipartHash = (String, MultipartContent);
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum MultipartContent {
-    File { filename: String, metadata: String },
+    File {
+        filename: String,
+        stored_as: PathBuf,
+    },
     Body(String),
 }
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub enum MultipartForm {
-    Map(HashMap<String, MultipartForm>),
-    Array(Vec<MultipartForm>),
-    String(String),
-    Empty,
-}
-
-impl MultipartForm {
-    pub fn merge(&mut self, other: Self) {
-        match *self {
-            MultipartForm::Empty => *self = other,
-            MultipartForm::Map(ref mut map) => {
-                if let MultipartForm::Map(other) = other {
-                    other
-                        .into_iter()
-                        .map(|(key, value)| {
-                            if map.contains_key(&key) {
-                                if let Some(m) = map.get_mut(&key) {
-                                    m.merge(value);
-                                }
-                            } else {
-                                map.insert(key, value);
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                }
-            }
-            MultipartForm::Array(ref mut arr) => {
-                if let MultipartForm::Array(other) = other {
-                    arr.extend(other)
-                }
-            }
-            _ => (),
-        }
-    }
-}
-
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum MultipartNamePart {
     Name(String),
     Map(String),
     Array,
 }
+
+pub type MultipartForm = Vec<(Vec<MultipartNamePart>, MultipartContent)>;
 
 fn parse_multipart_name(name: String) -> Result<Vec<MultipartNamePart>, DropmuttError> {
     name.split('[')
@@ -154,7 +123,8 @@ where
 
 fn handle_file_upload<S>(
     field: multipart::Field<S>,
-    pool: FsPool<CpuPool>,
+    pool: CpuPool,
+    path_generator: PathGenerator,
 ) -> impl Future<Item = MultipartHash, Error = DropmuttError>
 where
     S: Stream<Item = Bytes, Error = PayloadError>,
@@ -183,12 +153,23 @@ where
         return Either::B(result(Err(DropmuttError::Filename)));
     };
 
-    let write = match pool.write(format!("uploads/{}", filename), Default::default()) {
-        Ok(writer) => writer,
-        Err(e) => return Either::B(result(Err(e.into()))),
-    };
+    let extension = mime_guess::get_mime_extensions(field.content_type())
+        .and_then(|extensions| extensions.first().map(|r| *r))
+        .unwrap_or("png");
 
-    Either::A(
+    let stored_as = Path::new("uploads").join(path_generator.next_path(extension));
+    let mut stored_dir = stored_as.clone();
+    stored_dir.pop();
+
+    Either::A(pool.spawn_fn(move || {
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o755)
+            .create(stored_dir.clone())
+            .map_err(From::from)
+    }).and_then(move |_| {
+        let write =
+            FsPool::from_executor(pool.clone()).write(stored_as.clone(), Default::default());
         field
             .map_err(DropmuttError::from)
             .forward(write)
@@ -197,11 +178,11 @@ where
                     name,
                     MultipartContent::File {
                         filename,
-                        metadata: "".to_owned(),
+                        stored_as,
                     },
                 )
-            }),
-    )
+            })
+    }))
 }
 
 fn handle_form_data<S>(
@@ -243,7 +224,8 @@ where
 
 fn handle_multipart_field<S>(
     field: multipart::Field<S>,
-    pool: FsPool<CpuPool>,
+    pool: CpuPool,
+    path_generator: PathGenerator,
 ) -> impl Future<Item = MultipartHash, Error = DropmuttError>
 where
     S: Stream<Item = Bytes, Error = PayloadError>,
@@ -251,7 +233,7 @@ where
     let content_type = field.content_type().clone();
 
     if content_type == mime::APPLICATION_OCTET_STREAM || content_type.type_() == mime::IMAGE {
-        Either::A(Either::A(handle_file_upload(field, pool)))
+        Either::A(Either::A(handle_file_upload(field, pool, path_generator)))
     } else if content_type == mime::MULTIPART_FORM_DATA {
         Either::A(Either::B(handle_form_data(field)))
     } else {
@@ -262,7 +244,8 @@ where
 
 pub fn handle_multipart<S>(
     m: multipart::Multipart<S>,
-    pool: FsPool<CpuPool>,
+    pool: CpuPool,
+    path_generator: PathGenerator,
 ) -> Box<Stream<Item = MultipartHash, Error = DropmuttError>>
 where
     S: Stream<Item = Bytes, Error = PayloadError> + 'static,
@@ -271,13 +254,15 @@ where
         m.map_err(DropmuttError::from)
             .map(move |item| match item {
                 multipart::MultipartItem::Field(field) => Box::new(
-                    handle_multipart_field(field, pool.clone())
+                    handle_multipart_field(field, pool.clone(), path_generator.clone())
                         .map(From::from)
                         .into_stream(),
                 )
                     as Box<Stream<Item = MultipartHash, Error = DropmuttError>>,
-                multipart::MultipartItem::Nested(m) => Box::new(handle_multipart(m, pool.clone()))
-                    as Box<Stream<Item = MultipartHash, Error = DropmuttError>>,
+                multipart::MultipartItem::Nested(m) => {
+                    Box::new(handle_multipart(m, pool.clone(), path_generator.clone()))
+                        as Box<Stream<Item = MultipartHash, Error = DropmuttError>>
+                }
             })
             .flatten(),
     )
@@ -285,7 +270,8 @@ where
 
 pub fn do_multipart_handling<S>(
     m: multipart::Multipart<S>,
-    pool: FsPool<CpuPool>,
+    pool: CpuPool,
+    path_generator: PathGenerator,
 ) -> impl Future<Item = MultipartForm, Error = DropmuttError>
 where
     S: Stream<Item = Bytes, Error = PayloadError> + 'static,
@@ -293,32 +279,40 @@ where
     let max_files = 10;
     let max_fields = 100;
 
-    handle_multipart(m, pool)
+    handle_multipart(m, pool, path_generator)
         .fold(
             (Vec::new(), 0, 0),
             move |(mut acc, file_count, field_count), (name, content)| match content {
-                MultipartContent::File { filename, metadata } => {
-                    let _ = metadata;
+                MultipartContent::File {
+                    filename,
+                    stored_as,
+                } => {
                     let file_count = file_count + 1;
 
                     if file_count < max_files {
                         parse_multipart_name(name).map(|name| {
-                            acc.push((name, filename));
+                            acc.push((
+                                name,
+                                MultipartContent::File {
+                                    filename,
+                                    stored_as,
+                                },
+                            ));
 
-                            (acc, file_count + 1, field_count)
+                            (acc, file_count, field_count)
                         })
                     } else {
                         Err(DropmuttError::FileCount)
                     }
                 }
-                MultipartContent::Body(body) => {
+                b @ MultipartContent::Body(_) => {
                     let field_count = field_count + 1;
 
                     if field_count < max_fields {
                         parse_multipart_name(name).map(|name| {
-                            acc.push((name, body));
+                            acc.push((name, b));
 
-                            (acc, file_count, field_count + 1)
+                            (acc, file_count, field_count)
                         })
                     } else {
                         Err(DropmuttError::FormCount)
@@ -326,35 +320,7 @@ where
                 }
             },
         )
-        .map(|(v, _, _)| {
-            v.into_iter()
-                .fold(MultipartForm::Empty, |mut acc, (mut name, value)| {
-                    name.reverse();
-
-                    acc.merge(
-                        name.into_iter()
-                            .fold(MultipartForm::Empty, move |acc, part| {
-                                let item = if acc == MultipartForm::Empty {
-                                    MultipartForm::String(value.clone())
-                                } else {
-                                    acc
-                                };
-
-                                match part {
-                                    MultipartNamePart::Array => MultipartForm::Array(vec![item]),
-                                    MultipartNamePart::Map(name)
-                                    | MultipartNamePart::Name(name) => MultipartForm::Map({
-                                        let mut m = HashMap::new();
-                                        m.insert(name, item);
-                                        m
-                                    }),
-                                }
-                            }),
-                    );
-
-                    acc
-                })
-        })
+        .map(|(multipart_form, _, _)| multipart_form)
 }
 
 pub enum PostKind {

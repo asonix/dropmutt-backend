@@ -12,10 +12,13 @@ extern crate futures;
 extern crate futures_cpupool;
 extern crate futures_fs;
 extern crate http as h;
+extern crate image;
 #[macro_use]
 extern crate log;
 extern crate mime;
+extern crate mime_guess;
 extern crate r2d2;
+extern crate rand;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
@@ -31,18 +34,20 @@ use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest,
                              identity::{CookieIdentityPolicy, IdentityService, RequestIdentity}}};
 use diesel::{pg::PgConnection, r2d2::{ConnectionManager, Pool}};
 use dotenv::dotenv;
-use futures::{Future, future::{result, Either}};
+use futures::{Future, Stream, future::{result, Either}, stream::futures_unordered};
 use futures_cpupool::CpuPool;
-use futures_fs::FsPool;
 
 mod db;
 mod error;
+mod image_processor;
+mod path_generator;
 mod models;
 mod schema;
 mod upload;
 
 use self::error::DropmuttError;
-use self::upload::{do_multipart_handling, post_kind, MultipartForm, PostKind};
+use self::path_generator::PathGenerator;
+use self::upload::{do_multipart_handling, post_kind, MultipartContent, MultipartForm, PostKind};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Success {
@@ -52,9 +57,36 @@ pub struct Success {
 #[derive(Clone)]
 pub struct AppState {
     app_path: String,
+    path_generator: PathGenerator,
+    img_processor: Addr<Syn, image_processor::ImageProcessor>,
     db: Addr<Syn, db::DbActor>,
     pool: CpuPool,
     signup_enabled: bool,
+}
+
+fn process_image(
+    db: Addr<Syn, db::DbActor>,
+    ip: Addr<Syn, image_processor::ImageProcessor>,
+    token: String,
+    file: models::File,
+) {
+    Arbiter::handle().spawn(
+        ip.send(image_processor::ProcessImage(file))
+            .then(|res| match res {
+                Ok(res) => res,
+                Err(e) => Err(e.into()),
+            })
+            .and_then(move |proc_res| {
+                db.clone()
+                    .send(db::StoreProcessedImage(token.clone(), proc_res))
+                    .then(|res| match res {
+                        Ok(res) => res,
+                        Err(e) => Err(e.into()),
+                    })
+            })
+            .map(|_| ())
+            .map_err(|e| error!("Error in background: {}", e)),
+    )
 }
 
 fn upload(
@@ -66,15 +98,45 @@ fn upload(
         .map(|s| s.to_owned());
 
     result(id)
-        .and_then(move |_| {
+        .and_then(move |token| {
             result(post_kind(&req)).and_then(move |upload_kind| match upload_kind {
                 PostKind::Multipart => Either::A(
                     do_multipart_handling(
                         req.multipart(),
-                        FsPool::from_executor(state.pool.clone()),
-                    ).map(|m: MultipartForm| {
-                        info!("Responding with {:?}", m);
-                        HttpResponse::Created().json(m)
+                        state.pool.clone(),
+                        state.path_generator.clone(),
+                    ).and_then(move |m: MultipartForm| {
+                        futures_unordered(m.iter().filter_map(|(_, v)| match *v {
+                            MultipartContent::File {
+                                ref filename,
+                                ref stored_as,
+                            } => {
+                                let _ = filename;
+                                let img_p = state.img_processor.clone();
+                                let db = state.db.clone();
+                                let token = token.clone();
+
+                                Some(
+                                    state
+                                        .db
+                                        .clone()
+                                        .send(db::StoreImage(token.clone(), stored_as.to_owned()))
+                                        .then(|res| match res {
+                                            Ok(res) => res,
+                                            Err(e) => Err(e.into()),
+                                        })
+                                        .map(move |(_, file)| {
+                                            process_image(db, img_p, token, file);
+                                        }),
+                                )
+                            }
+                            _ => None,
+                        })).fold(0, |acc, _| Ok(acc + 1) as Result<_, DropmuttError>)
+                            .map(|total| {
+                                info!("Stored {} files", total);
+                                info!("Responding with {:?}", m);
+                                HttpResponse::Created().json(m)
+                            })
                     })
                         .map_err(|e| {
                             info!("Responding with Error: {}", e);
@@ -199,12 +261,16 @@ fn main() {
 
     let db = SyncArbiter::start(3, move || db::DbActor::new(prepare_connection()));
 
+    let img_processor = SyncArbiter::start(3, move || image_processor::ImageProcessor);
+
     let pool = CpuPool::new(20);
 
     server::new(move || {
         let state = AppState {
             app_path: "static/index.html".to_owned(),
+            path_generator: PathGenerator::with_start_position(0),
             pool: pool.clone(),
+            img_processor: img_processor.clone(),
             db: db.clone(),
             signup_enabled: true,
         };

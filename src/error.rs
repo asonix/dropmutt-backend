@@ -5,7 +5,7 @@ use actix::MailboxError;
 use actix_web::{Error, HttpResponse, ResponseError, error::{ContentTypeError, MultipartError}};
 use bcrypt::BcryptError;
 use diesel;
-use futures_fs;
+use image;
 use r2d2;
 use serde_urlencoded;
 
@@ -18,14 +18,16 @@ pub struct DropmutErrorResponse {
 pub enum DropmuttError {
     #[fail(display = "Error in actix, {}", _0)]
     Actix(Error),
-    #[fail(display = "Error in futures fs, {}", _0)]
-    FuturesFs(#[cause] futures_fs::Error),
     #[fail(display = "Error in diesel, {}", _0)]
     Diesel(#[cause] diesel::result::Error),
     #[fail(display = "Error in r2d2, {}", _0)]
     R2d2(#[cause] r2d2::Error),
     #[fail(display = "Error serving file, {}", _0)]
     IO(#[cause] io::Error),
+    #[fail(display = "Error processing image, {}", _0)]
+    Image(#[cause] image::ImageError),
+    #[fail(display = "Error processing image")]
+    ImageProcessing,
     #[fail(display = "File upload is missing Content-Disposition header")]
     ContentDisposition,
     #[fail(display = "Request was made with bad Content-Type header")]
@@ -74,12 +76,6 @@ impl From<ContentTypeError> for DropmuttError {
     }
 }
 
-impl From<futures_fs::Error> for DropmuttError {
-    fn from(e: futures_fs::Error) -> Self {
-        DropmuttError::FuturesFs(e)
-    }
-}
-
 impl From<serde_urlencoded::de::Error> for DropmuttError {
     fn from(_: serde_urlencoded::de::Error) -> Self {
         DropmuttError::UrlEncoded
@@ -122,15 +118,16 @@ impl From<io::Error> for DropmuttError {
     }
 }
 
+impl From<image::ImageError> for DropmuttError {
+    fn from(e: image::ImageError) -> Self {
+        DropmuttError::Image(e)
+    }
+}
+
 impl ResponseError for DropmuttError {
     fn error_response(&self) -> HttpResponse {
         match *self {
             DropmuttError::Actix(ref e) => {
-                HttpResponse::InternalServerError().json(DropmutErrorResponse {
-                    errors: vec![format!("{}", e)],
-                })
-            }
-            DropmuttError::FuturesFs(ref e) => {
                 HttpResponse::InternalServerError().json(DropmutErrorResponse {
                     errors: vec![format!("{}", e)],
                 })
@@ -145,6 +142,11 @@ impl ResponseError for DropmuttError {
                     _ => HttpResponse::InternalServerError().json(body),
                 }
             }
+            DropmuttError::Image(ref e) => {
+                HttpResponse::InternalServerError().json(DropmutErrorResponse {
+                    errors: vec![format!("{}", e)],
+                })
+            }
             DropmuttError::R2d2(ref e) => {
                 HttpResponse::InternalServerError().json(DropmutErrorResponse {
                     errors: vec![format!("{}", e)],
@@ -155,10 +157,11 @@ impl ResponseError for DropmuttError {
                     errors: vec![format!("{}", e)],
                 })
             }
-            DropmuttError::Mailbox | DropmuttError::Bcrypt => HttpResponse::InternalServerError()
-                .json(DropmutErrorResponse {
+            DropmuttError::Mailbox | DropmuttError::Bcrypt | DropmuttError::ImageProcessing => {
+                HttpResponse::InternalServerError().json(DropmutErrorResponse {
                     errors: vec![format!("{}", self)],
-                }),
+                })
+            }
             DropmuttError::Auth => HttpResponse::Unauthorized().json(DropmutErrorResponse {
                 errors: vec![format!("{}", self)],
             }),
