@@ -232,9 +232,9 @@ where
 {
     let content_type = field.content_type().clone();
 
-    if content_type == mime::APPLICATION_OCTET_STREAM || content_type.type_() == mime::IMAGE {
+    if content_type.type_() == mime::IMAGE {
         Either::A(Either::A(handle_file_upload(field, pool, path_generator)))
-    } else if content_type == mime::MULTIPART_FORM_DATA {
+    } else if content_type == mime::APPLICATION_OCTET_STREAM {
         Either::A(Either::B(handle_form_data(field)))
     } else {
         warn!("Bad Content-Type header: {}", content_type);
@@ -253,13 +253,17 @@ where
     Box::new(
         m.map_err(DropmuttError::from)
             .map(move |item| match item {
-                multipart::MultipartItem::Field(field) => Box::new(
-                    handle_multipart_field(field, pool.clone(), path_generator.clone())
-                        .map(From::from)
-                        .into_stream(),
-                )
-                    as Box<Stream<Item = MultipartHash, Error = DropmuttError>>,
+                multipart::MultipartItem::Field(field) => {
+                    info!("Field: {:?}", field);
+                    Box::new(
+                        handle_multipart_field(field, pool.clone(), path_generator.clone())
+                            .map(From::from)
+                            .into_stream(),
+                    )
+                        as Box<Stream<Item = MultipartHash, Error = DropmuttError>>
+                }
                 multipart::MultipartItem::Nested(m) => {
+                    info!("Nested");
                     Box::new(handle_multipart(m, pool.clone(), path_generator.clone()))
                         as Box<Stream<Item = MultipartHash, Error = DropmuttError>>
                 }
