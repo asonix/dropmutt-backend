@@ -65,7 +65,7 @@ fn resize_image(
     filename: &str,
     directory: &Path,
 ) -> Result<(PathBuf, i32, i32), DropmuttError> {
-    let img = img.thumbnail(width, 10_000_000);
+    let img = img.thumbnail(width, width);
 
     let path = image_path(filename, &format!("{}", width), directory, false);
 

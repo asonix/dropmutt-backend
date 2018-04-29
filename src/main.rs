@@ -69,24 +69,20 @@ fn process_image(
     ip: Addr<Syn, image_processor::ImageProcessor>,
     token: String,
     file: models::File,
-) {
-    Arbiter::handle().spawn(
-        ip.send(image_processor::ProcessImage(file))
-            .then(|res| match res {
-                Ok(res) => res,
-                Err(e) => Err(e.into()),
-            })
-            .and_then(move |proc_res| {
-                db.clone()
-                    .send(db::StoreProcessedImage(token.clone(), proc_res))
-                    .then(|res| match res {
-                        Ok(res) => res,
-                        Err(e) => Err(e.into()),
-                    })
-            })
-            .map(|_| ())
-            .map_err(|e| error!("Error in background: {}", e)),
-    )
+) -> impl Future<Item = models::Image, Error = DropmuttError> {
+    ip.send(image_processor::ProcessImage(file))
+        .then(|res| match res {
+            Ok(res) => res,
+            Err(e) => Err(e.into()),
+        })
+        .and_then(move |proc_res| {
+            db.clone()
+                .send(db::StoreProcessedImage(token.clone(), proc_res))
+                .then(|res| match res {
+                    Ok(res) => res,
+                    Err(e) => Err(e.into()),
+                })
+        })
 }
 
 fn upload(
@@ -125,8 +121,8 @@ fn upload(
                                             Ok(res) => res,
                                             Err(e) => Err(e.into()),
                                         })
-                                        .map(move |(_, file)| {
-                                            process_image(db, img_p, token, file);
+                                        .and_then(move |(_, file)| {
+                                            process_image(db, img_p, token, file)
                                         }),
                                 )
                             }
