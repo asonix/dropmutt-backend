@@ -97,10 +97,17 @@ impl Handler<ProcessImage> for ImageProcessor {
         let width = rgbaimg.width() as i32;
         let height = rgbaimg.height() as i32;
 
+        info!("Processing image: {}x{}", width, height);
+
         let mut files = Vec::new();
 
-        files.push(resize_image(&img, 200, &filename, &directory)?);
-        files.push(resize_image(&img, 400, &filename, &directory)?);
+        if width > 200 {
+            files.push(resize_image(&img, 200, &filename, &directory)?);
+        }
+
+        if width > 400 {
+            files.push(resize_image(&img, 400, &filename, &directory)?);
+        }
 
         if width > 800 {
             files.push(resize_image(&img, 800, &filename, &directory)?);

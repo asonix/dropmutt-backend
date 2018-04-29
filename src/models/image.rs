@@ -34,6 +34,7 @@ impl ImageWithFiles {
         image_files::table
             .inner_join(files::table)
             .filter(image_files::dsl::image_id.eq_any(image_ids))
+            .order(image_files::dsl::width.asc())
             .select((
                 image_files::dsl::image_id,
                 image_files::dsl::width,
