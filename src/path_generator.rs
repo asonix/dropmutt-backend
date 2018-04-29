@@ -1,15 +1,20 @@
-use std::{path::PathBuf, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
+use std::{path::{Path, PathBuf}, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
+use actix_multipart::FilenameGenerator;
+use mime;
+use mime_guess;
 use rand::{thread_rng, Rng};
 
 #[derive(Clone)]
 pub struct PathGenerator {
+    root_dir: PathBuf,
     next_path: Arc<AtomicUsize>,
 }
 
 impl PathGenerator {
-    pub fn with_start_position(start: usize) -> Self {
+    pub fn new<P: AsRef<Path>>(root_dir: P, start: usize) -> Self {
         PathGenerator {
+            root_dir: root_dir.as_ref().to_owned(),
             next_path: Arc::new(AtomicUsize::new(start)),
         }
     }
@@ -35,7 +40,21 @@ impl PathGenerator {
 
         file_path.push(format!("{}.{}", filename, extension));
 
-        file_path
+        self.root_dir.join(file_path)
+    }
+}
+
+impl FilenameGenerator for PathGenerator {
+    fn next_filename(&self, m: &mime::Mime) -> Option<PathBuf> {
+        if m.type_() == mime::IMAGE {
+            let extension = mime_guess::get_mime_extensions(m)
+                .and_then(|extensions| extensions.first().map(|r| *r))
+                .unwrap_or("png");
+
+            Some(self.next_path(extension))
+        } else {
+            None
+        }
     }
 }
 
@@ -45,7 +64,7 @@ mod tests {
 
     #[test]
     fn generates_correct_paths() {
-        let image_path = PathGenerator::with_start_position(0);
+        let image_path = PathGenerator::new("/tmp", 0);
 
         assert!(
             image_path

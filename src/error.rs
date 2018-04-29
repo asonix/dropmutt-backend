@@ -1,13 +1,12 @@
 use std::io;
-use std::string::FromUtf8Error;
 
 use actix::MailboxError;
+use actix_multipart;
 use actix_web::{Error, HttpResponse, ResponseError, error::{ContentTypeError, MultipartError}};
 use bcrypt::BcryptError;
 use diesel;
 use image;
 use r2d2;
-use serde_urlencoded;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DropmutErrorResponse {
@@ -26,26 +25,12 @@ pub enum DropmuttError {
     IO(#[cause] io::Error),
     #[fail(display = "Error processing image, {}", _0)]
     Image(#[cause] image::ImageError),
+    #[fail(display = "Problem in upload, {}", _0)]
+    Upload(#[cause] actix_multipart::Error),
     #[fail(display = "Error processing image")]
     ImageProcessing,
-    #[fail(display = "File upload is missing Content-Disposition header")]
-    ContentDisposition,
     #[fail(display = "Request was made with bad Content-Type header")]
     ContentType,
-    #[fail(display = "File uploads must have a filename")]
-    Filename,
-    #[fail(display = "Multipart forms must have field names")]
-    Fieldname,
-    #[fail(display = "Form too large")]
-    FormSize,
-    #[fail(display = "Failed to parse form")]
-    UrlEncoded,
-    #[fail(display = "Too many forms submitted")]
-    FormCount,
-    #[fail(display = "Too many files submitted")]
-    FileCount,
-    #[fail(display = "Field name contained invalid utf8")]
-    Utf8,
     #[fail(display = "Failed to log in user")]
     Login,
     #[fail(display = "Failed to talk to actor")]
@@ -73,18 +58,6 @@ impl From<MultipartError> for DropmuttError {
 impl From<ContentTypeError> for DropmuttError {
     fn from(e: ContentTypeError) -> Self {
         DropmuttError::Actix(e.into())
-    }
-}
-
-impl From<serde_urlencoded::de::Error> for DropmuttError {
-    fn from(_: serde_urlencoded::de::Error) -> Self {
-        DropmuttError::UrlEncoded
-    }
-}
-
-impl From<FromUtf8Error> for DropmuttError {
-    fn from(_: FromUtf8Error) -> Self {
-        DropmuttError::Utf8
     }
 }
 
@@ -142,6 +115,9 @@ impl ResponseError for DropmuttError {
                     _ => HttpResponse::InternalServerError().json(body),
                 }
             }
+            DropmuttError::Upload(ref e) => HttpResponse::BadRequest().json(DropmutErrorResponse {
+                errors: vec![format!("{}", e)],
+            }),
             DropmuttError::Image(ref e) => {
                 HttpResponse::InternalServerError().json(DropmutErrorResponse {
                     errors: vec![format!("{}", e)],
@@ -165,19 +141,11 @@ impl ResponseError for DropmuttError {
             DropmuttError::Auth => HttpResponse::Unauthorized().json(DropmutErrorResponse {
                 errors: vec![format!("{}", self)],
             }),
-            DropmuttError::ContentDisposition
-            | DropmuttError::ContentType
-            | DropmuttError::FormCount
-            | DropmuttError::FileCount
-            | DropmuttError::FormSize
-            | DropmuttError::UrlEncoded
-            | DropmuttError::Fieldname
-            | DropmuttError::Utf8
-            | DropmuttError::Login
-            | DropmuttError::SignupClosed
-            | DropmuttError::Filename => HttpResponse::BadRequest().json(DropmutErrorResponse {
-                errors: vec![format!("{}", self)],
-            }),
+            | DropmuttError::ContentType | DropmuttError::Login | DropmuttError::SignupClosed => {
+                HttpResponse::BadRequest().json(DropmutErrorResponse {
+                    errors: vec![format!("{}", self)],
+                })
+            }
         }
     }
 }
