@@ -26,7 +26,7 @@ extern crate serde_derive;
 extern crate serde_json;
 extern crate serde_urlencoded;
 
-use std::env;
+use std::{env, path::PathBuf};
 
 use actix::prelude::*;
 use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest, HttpResponse,
@@ -36,7 +36,7 @@ use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest,
 use actix_multipart::*;
 use diesel::{pg::PgConnection, r2d2::{ConnectionManager, Pool}};
 use dotenv::dotenv;
-use futures::{Future, Stream, future::{result, Either}, stream::futures_unordered};
+use futures::{Future, future::{result, Either}};
 use futures_cpupool::CpuPool;
 
 mod db;
@@ -66,10 +66,53 @@ pub struct AppState {
     signup_enabled: bool,
 }
 
+pub struct ImageForm {
+    file_upload: (String, PathBuf),
+    description: String,
+    alternate_text: String,
+    gallery_name: String,
+}
+
+impl ImageForm {
+    fn from_value(v: Value) -> Option<Self> {
+        let mut v = match v {
+            Value::Map(hm) => hm,
+            _ => return None,
+        };
+
+        let file_upload = v.remove("file-upload").and_then(|v| match v {
+            Value::File(filename, path) => Some((filename, path)),
+            _ => None,
+        })?;
+
+        let description = v.remove("description").and_then(|v| match v {
+            Value::Text(string) => Some(string),
+            _ => None,
+        })?;
+
+        let alternate_text = v.remove("alternate-text").and_then(|v| match v {
+            Value::Text(string) => Some(string),
+            _ => None,
+        })?;
+
+        let gallery_name = v.remove("gallery-name").and_then(|v| match v {
+            Value::Text(string) => Some(string),
+            _ => None,
+        })?;
+
+        Some(ImageForm {
+            file_upload,
+            description,
+            alternate_text,
+            gallery_name,
+        })
+    }
+}
+
 fn process_image(
     db: Addr<Syn, db::DbActor>,
     ip: Addr<Syn, image_processor::ImageProcessor>,
-    token: String,
+    unprocessed_image: models::UnprocessedImage,
     file: models::File,
 ) -> impl Future<Item = models::Image, Error = DropmuttError> {
     ip.send(image_processor::ProcessImage(file))
@@ -79,7 +122,7 @@ fn process_image(
         })
         .and_then(move |proc_res| {
             db.clone()
-                .send(db::StoreProcessedImage(token.clone(), proc_res))
+                .send(db::StoreProcessedImage(unprocessed_image, proc_res))
                 .then(|res| match res {
                     Ok(res) => res,
                     Err(e) => Err(e.into()),
@@ -102,40 +145,40 @@ fn upload(
                     handle_upload(req.multipart(), state.form.clone())
                         .map_err(DropmuttError::Upload)
                         .and_then(move |m: MultipartForm| {
-                            futures_unordered(m.iter().filter_map(|(_, v)| match *v {
-                                MultipartContent::File {
-                                    ref filename,
-                                    ref stored_as,
-                                } => {
-                                    let _ = filename;
-                                    let img_p = state.img_processor.clone();
-                                    let db = state.db.clone();
-                                    let token = token.clone();
+                            let ImageForm {
+                                file_upload,
+                                description,
+                                alternate_text,
+                                gallery_name,
+                            } = match ImageForm::from_value(consolidate(m)) {
+                                Some(imgform) => imgform,
+                                None => return Either::B(result(Err(DropmuttError::MissingFields))),
+                            };
 
-                                    Some(
-                                        state
-                                            .db
-                                            .clone()
-                                            .send(db::StoreImage(
-                                                token.clone(),
-                                                stored_as.to_owned(),
-                                            ))
-                                            .then(|res| match res {
-                                                Ok(res) => res,
-                                                Err(e) => Err(e.into()),
-                                            })
-                                            .and_then(move |(_, file)| {
-                                                process_image(db, img_p, token, file)
-                                            }),
-                                    )
-                                }
-                                _ => None,
-                            })).fold(0, |acc, _| Ok(acc + 1) as Result<_, DropmuttError>)
-                                .map(|total| {
-                                    info!("Stored {} files", total);
-                                    info!("Responding with {:?}", m);
-                                    HttpResponse::Created().json(m)
+                            let (_, file_path) = file_upload;
+                            let img_p = state.img_processor.clone();
+                            let db = state.db.clone();
+
+                            let fut = state
+                                .db
+                                .clone()
+                                .send(db::StoreImage {
+                                    user_token: token.clone(),
+                                    file_path,
+                                    gallery_name,
+                                    description,
+                                    alternate_text,
                                 })
+                                .then(|res| match res {
+                                    Ok(res) => res,
+                                    Err(e) => Err(e.into()),
+                                })
+                                .and_then(move |(unprocessed_image, file)| {
+                                    process_image(db, img_p, unprocessed_image, file)
+                                })
+                                .map(move |_| HttpResponse::Created().json(r#"{"msg":"success"}"#));
+
+                            Either::A(fut)
                         })
                         .map_err(|e| {
                             info!("Responding with Error: {}", e);
@@ -304,7 +347,7 @@ fn prepare_connection() -> Pool<ConnectionManager<PgConnection>> {
 }
 
 fn main() {
-    ::std::env::set_var("RUST_LOG", "dropmutt_site=info");
+    ::std::env::set_var("RUST_LOG", "actix_multipart,dropmutt_site=info");
     env_logger::init();
     let sys = actix::System::new("dropmutt-site");
 
@@ -315,10 +358,7 @@ fn main() {
     let pool = CpuPool::new(20);
 
     let form = Form::from_executor(pool.clone())
-        .field(
-            "file-uploads",
-            Field::array(Field::file(PathGenerator::new("uploads", 0))),
-        )
+        .field("file-upload", Field::file(PathGenerator::new("uploads", 0)))
         .field("description", Field::text())
         .field("alternate-text", Field::text())
         .field("gallery-name", Field::text());

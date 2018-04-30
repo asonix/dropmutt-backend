@@ -10,6 +10,7 @@ CREATE TABLE galleries (
 INSERT INTO galleries (name) VALUES ( 'sketches' );
 INSERT INTO galleries (name) VALUES ( 'flat-colors' );
 INSERT INTO galleries (name) VALUES ( 'cell-shaded' );
+INSERT INTO galleries (name) VALUES ( 'ref-sheets' );
 
 CREATE TABLE gallery_images (
     id SERIAL PRIMARY KEY,
@@ -18,3 +19,5 @@ CREATE TABLE gallery_images (
     created_at TIMESTAMPTZ NOT NULL DEFAULT 'now',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT 'now'
 );
+
+ALTER TABLE unprocessed_images ADD COLUMN gallery_id INTEGER REFERENCES galleries(id) ON DELETE CASCADE NOT NULL;

@@ -43,6 +43,8 @@ table! {
     images (id) {
         id -> Int4,
         uploaded_by -> Int4,
+        description -> Text,
+        alternate_text -> Text,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
@@ -53,8 +55,11 @@ table! {
         id -> Int4,
         uploaded_by -> Int4,
         image_file -> Int4,
+        description -> Text,
+        alternate_text -> Text,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        gallery_id -> Int4,
     }
 }
 
@@ -74,6 +79,7 @@ joinable!(image_files -> files (file_id));
 joinable!(image_files -> images (image_id));
 joinable!(images -> users (uploaded_by));
 joinable!(unprocessed_images -> files (image_file));
+joinable!(unprocessed_images -> galleries (gallery_id));
 joinable!(unprocessed_images -> users (uploaded_by));
 
 allow_tables_to_appear_in_same_query!(

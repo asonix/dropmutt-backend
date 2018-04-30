@@ -9,6 +9,8 @@ CREATE TABLE files (
 CREATE TABLE images (
     id SERIAL PRIMARY KEY,
     uploaded_by INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    description TEXT NOT NULL,
+    alternate_text TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT 'now',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT 'now'
 );
@@ -27,6 +29,8 @@ CREATE TABLE unprocessed_images (
     id SERIAL PRIMARY KEY,
     uploaded_by INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
     image_file INTEGER REFERENCES files(id) ON DELETE CASCADE NOT NULL,
+    description TEXT NOT NULL,
+    alternate_text TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT 'now',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT 'now'
 );

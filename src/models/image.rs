@@ -5,7 +5,7 @@ use diesel::pg::PgConnection;
 
 use error::DropmuttError;
 use schema::{self, images};
-use super::User;
+use super::UnprocessedImage;
 
 #[derive(Debug, Deserialize, Queryable, Serialize)]
 pub struct FilesWithSizes {
@@ -17,27 +17,41 @@ pub struct FilesWithSizes {
 #[derive(Debug, Deserialize, Queryable, Serialize)]
 pub struct ImageWithFiles {
     id: i32,
+    description: String,
+    alternate_text: String,
     files: Vec<FilesWithSizes>,
 }
 
 impl ImageWithFiles {
-    pub fn consolidate(results: Vec<(i32, i32, i32, String)>) -> Vec<ImageWithFiles> {
+    pub fn consolidate(
+        results: Vec<(i32, String, String, i32, i32, String)>,
+    ) -> Vec<ImageWithFiles> {
         let mut v: Vec<_> = results
             .into_iter()
-            .fold(BTreeMap::new(), |mut acc, (id, width, height, path)| {
-                {
-                    let entry = acc.entry(id).or_insert(Vec::new());
+            .fold(
+                BTreeMap::new(),
+                |mut acc, (id, desc, alt, width, height, path)| {
+                    {
+                        let entry = acc.entry((id, desc, alt)).or_insert(Vec::new());
 
-                    entry.push(FilesWithSizes {
-                        path,
-                        width,
-                        height,
-                    });
-                }
-                acc
-            })
+                        entry.push(FilesWithSizes {
+                            path,
+                            width,
+                            height,
+                        });
+                    }
+                    acc
+                },
+            )
             .into_iter()
-            .map(|(id, files)| ImageWithFiles { id, files })
+            .map(
+                |((id, description, alternate_text), files)| ImageWithFiles {
+                    id,
+                    description,
+                    alternate_text,
+                    files,
+                },
+            )
             .collect();
 
         v.reverse();
@@ -46,6 +60,8 @@ impl ImageWithFiles {
 
     pub fn selection() -> (
         schema::image_files::columns::image_id,
+        schema::images::description,
+        schema::images::alternate_text,
         schema::image_files::columns::width,
         schema::image_files::columns::height,
         schema::files::columns::file_path,
@@ -55,6 +71,8 @@ impl ImageWithFiles {
 
         (
             image_files::dsl::image_id,
+            images::dsl::description,
+            images::dsl::alternate_text,
             image_files::dsl::width,
             image_files::dsl::height,
             files::dsl::file_path,
@@ -66,12 +84,14 @@ impl ImageWithFiles {
         use schema::image_files;
         use diesel::prelude::*;
 
-        let image_ids = images::table
+        let image_ids: Vec<i32> = images::table
             .select(images::dsl::id)
             .order(images::dsl::id.desc())
-            .limit(count.min(30));
+            .limit(count.min(30))
+            .get_results(conn)?;
 
         image_files::table
+            .inner_join(images::table)
             .inner_join(files::table)
             .filter(image_files::dsl::image_id.eq_any(image_ids))
             .order(image_files::dsl::width.asc())
@@ -90,13 +110,15 @@ impl ImageWithFiles {
         use schema::image_files;
         use diesel::prelude::*;
 
-        let image_ids = images::table
+        let image_ids: Vec<i32> = images::table
             .filter(images::dsl::id.lt(id))
             .select(images::dsl::id)
             .order(images::dsl::id.desc())
-            .limit(count.min(30));
+            .limit(count.min(30))
+            .get_results(conn)?;
 
         image_files::table
+            .inner_join(images::table)
             .inner_join(files::table)
             .filter(image_files::dsl::image_id.eq_any(image_ids))
             .select(ImageWithFiles::selection())
@@ -126,12 +148,16 @@ impl Image {
 #[table_name = "images"]
 pub struct NewImage {
     uploaded_by: i32,
+    description: String,
+    alternate_text: String,
 }
 
 impl NewImage {
-    pub fn new(user: &User) -> Self {
+    pub fn new(ui: &UnprocessedImage) -> Self {
         NewImage {
-            uploaded_by: user.id(),
+            uploaded_by: ui.uploaded_by(),
+            description: ui.description().to_owned(),
+            alternate_text: ui.description().to_owned(),
         }
     }
 

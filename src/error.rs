@@ -41,6 +41,8 @@ pub enum DropmuttError {
     Auth,
     #[fail(display = "Error in bcrypt")]
     Bcrypt,
+    #[fail(display = "Missing required fields")]
+    MissingFields,
 }
 
 impl From<Error> for DropmuttError {
@@ -141,7 +143,10 @@ impl ResponseError for DropmuttError {
             DropmuttError::Auth => HttpResponse::Unauthorized().json(DropmutErrorResponse {
                 errors: vec![format!("{}", self)],
             }),
-            | DropmuttError::ContentType | DropmuttError::Login | DropmuttError::SignupClosed => {
+            DropmuttError::MissingFields
+            | DropmuttError::ContentType
+            | DropmuttError::Login
+            | DropmuttError::SignupClosed => {
                 HttpResponse::BadRequest().json(DropmutErrorResponse {
                     errors: vec![format!("{}", self)],
                 })

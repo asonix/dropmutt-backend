@@ -48,9 +48,16 @@ impl Handler<StoreImage> for DbActor {
         let conn: &PgConnection = &*self.conn.get()?;
 
         conn.transaction(|| {
-            let user = models::User::by_token(&msg.0, conn)?;
-            let file = store_path(msg.1, conn)?;
-            let image = models::NewUnprocessedImage::new(&user, &file).insert(conn)?;
+            let user = models::User::by_token(&msg.user_token, conn)?;
+            let file = store_path(msg.file_path, conn)?;
+            let gallery = models::Gallery::by_name(&msg.gallery_name, conn)?;
+            let image = models::NewUnprocessedImage::new(
+                &user,
+                &file,
+                &gallery,
+                msg.alternate_text,
+                msg.description,
+            ).insert(conn)?;
 
             Ok((image, file))
         })
@@ -75,8 +82,6 @@ impl Handler<StoreProcessedImage> for DbActor {
         let conn: &PgConnection = &*self.conn.get()?;
 
         conn.transaction(|| {
-            let user = models::User::by_token(&msg.0, conn)?;
-
             let files = msg.1.files.into_iter().fold(
                 Ok(Vec::new()) as Result<Vec<_>, DropmuttError>,
                 |acc, (path, width, height)| match acc {
@@ -89,7 +94,7 @@ impl Handler<StoreProcessedImage> for DbActor {
                 },
             )?;
 
-            let image = models::NewImage::new(&user).insert(conn)?;
+            let image = models::NewImage::new(&msg.0).insert(conn)?;
 
             files.iter().fold(
                 Ok(image) as Result<_, DropmuttError>,
@@ -147,13 +152,19 @@ impl Message for LookupUser {
     type Result = Result<models::QueriedUser, DropmuttError>;
 }
 
-pub struct StoreImage(pub String, pub PathBuf);
+pub struct StoreImage {
+    pub user_token: String,
+    pub file_path: PathBuf,
+    pub gallery_name: String,
+    pub description: String,
+    pub alternate_text: String,
+}
 
 impl Message for StoreImage {
     type Result = Result<(models::UnprocessedImage, models::File), DropmuttError>;
 }
 
-pub struct StoreProcessedImage(pub String, pub ProcessResponse);
+pub struct StoreProcessedImage(pub models::UnprocessedImage, pub ProcessResponse);
 
 impl Message for StoreProcessedImage {
     type Result = Result<models::Image, DropmuttError>;
