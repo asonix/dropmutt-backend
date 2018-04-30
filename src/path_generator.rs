@@ -1,6 +1,6 @@
 use std::{path::{Path, PathBuf}, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
-use actix_multipart::FilenameGenerator;
+use form_data::FilenameGenerator;
 use mime;
 use mime_guess;
 use rand::{thread_rng, Rng};

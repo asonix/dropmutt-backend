@@ -1,10 +1,10 @@
 use std::io;
 
 use actix::MailboxError;
-use actix_multipart;
 use actix_web::{Error, HttpResponse, ResponseError, error::{ContentTypeError, MultipartError}};
 use bcrypt::BcryptError;
 use diesel;
+use form_data;
 use image;
 use r2d2;
 
@@ -26,7 +26,7 @@ pub enum DropmuttError {
     #[fail(display = "Error processing image, {}", _0)]
     Image(#[cause] image::ImageError),
     #[fail(display = "Problem in upload, {}", _0)]
-    Upload(#[cause] actix_multipart::Error),
+    Upload(#[cause] form_data::Error),
     #[fail(display = "Error processing image")]
     ImageProcessing,
     #[fail(display = "Request was made with bad Content-Type header")]

@@ -1,5 +1,4 @@
 extern crate actix;
-extern crate actix_multipart;
 extern crate actix_web;
 extern crate bcrypt;
 extern crate bytes;
@@ -9,6 +8,7 @@ extern crate dotenv;
 extern crate env_logger;
 #[macro_use]
 extern crate failure;
+extern crate form_data;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate futures_fs;
@@ -33,9 +33,9 @@ use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest,
                 Json, Path, Query, State,
                 middleware::{self, cors::Cors,
                              identity::{CookieIdentityPolicy, IdentityService, RequestIdentity}}};
-use actix_multipart::*;
 use diesel::{pg::PgConnection, r2d2::{ConnectionManager, Pool}};
 use dotenv::dotenv;
+use form_data::*;
 use futures::{Future, future::{result, Either}};
 use futures_cpupool::CpuPool;
 
@@ -142,15 +142,15 @@ fn upload(
         .and_then(move |token| {
             result(post_kind(&req)).and_then(move |upload_kind| match upload_kind {
                 PostKind::Multipart => Either::A(
-                    handle_upload(req.multipart(), state.form.clone())
+                    handle_multipart(req.multipart(), state.form.clone())
                         .map_err(DropmuttError::Upload)
-                        .and_then(move |m: MultipartForm| {
+                        .and_then(move |value| {
                             let ImageForm {
                                 file_upload,
                                 description,
                                 alternate_text,
                                 gallery_name,
-                            } = match ImageForm::from_value(consolidate(m)) {
+                            } = match ImageForm::from_value(value) {
                                 Some(imgform) => imgform,
                                 None => return Either::B(result(Err(DropmuttError::MissingFields))),
                             };
