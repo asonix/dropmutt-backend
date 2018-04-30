@@ -4,7 +4,7 @@ use diesel;
 use diesel::pg::PgConnection;
 
 use error::DropmuttError;
-use schema::images;
+use schema::{self, images};
 use super::User;
 
 #[derive(Debug, Deserialize, Queryable, Serialize)]
@@ -21,6 +21,46 @@ pub struct ImageWithFiles {
 }
 
 impl ImageWithFiles {
+    pub fn consolidate(results: Vec<(i32, i32, i32, String)>) -> Vec<ImageWithFiles> {
+        let mut v: Vec<_> = results
+            .into_iter()
+            .fold(BTreeMap::new(), |mut acc, (id, width, height, path)| {
+                {
+                    let entry = acc.entry(id).or_insert(Vec::new());
+
+                    entry.push(FilesWithSizes {
+                        path,
+                        width,
+                        height,
+                    });
+                }
+                acc
+            })
+            .into_iter()
+            .map(|(id, files)| ImageWithFiles { id, files })
+            .collect();
+
+        v.reverse();
+        v
+    }
+
+    pub fn selection() -> (
+        schema::image_files::columns::image_id,
+        schema::image_files::columns::width,
+        schema::image_files::columns::height,
+        schema::files::columns::file_path,
+    ) {
+        use schema::files;
+        use schema::image_files;
+
+        (
+            image_files::dsl::image_id,
+            image_files::dsl::width,
+            image_files::dsl::height,
+            files::dsl::file_path,
+        )
+    }
+
     pub fn recent(count: i64, conn: &PgConnection) -> Result<Vec<ImageWithFiles>, DropmuttError> {
         use schema::files;
         use schema::image_files;
@@ -35,35 +75,9 @@ impl ImageWithFiles {
             .inner_join(files::table)
             .filter(image_files::dsl::image_id.eq_any(image_ids))
             .order(image_files::dsl::width.asc())
-            .select((
-                image_files::dsl::image_id,
-                image_files::dsl::width,
-                image_files::dsl::height,
-                files::dsl::file_path,
-            ))
+            .select(ImageWithFiles::selection())
             .get_results(conn)
-            .map(|results| {
-                let mut v: Vec<_> = results
-                    .into_iter()
-                    .fold(BTreeMap::new(), |mut acc, (id, width, height, path)| {
-                        {
-                            let entry = acc.entry(id).or_insert(Vec::new());
-
-                            entry.push(FilesWithSizes {
-                                path,
-                                width,
-                                height,
-                            });
-                        }
-                        acc
-                    })
-                    .into_iter()
-                    .map(|(id, files)| ImageWithFiles { id, files })
-                    .collect();
-
-                v.reverse();
-                v
-            })
+            .map(ImageWithFiles::consolidate)
             .map_err(From::from)
     }
 
@@ -85,35 +99,9 @@ impl ImageWithFiles {
         image_files::table
             .inner_join(files::table)
             .filter(image_files::dsl::image_id.eq_any(image_ids))
-            .select((
-                image_files::dsl::image_id,
-                image_files::dsl::width,
-                image_files::dsl::height,
-                files::dsl::file_path,
-            ))
+            .select(ImageWithFiles::selection())
             .get_results(conn)
-            .map(|results| {
-                let mut v: Vec<_> = results
-                    .into_iter()
-                    .fold(BTreeMap::new(), |mut acc, (id, width, height, path)| {
-                        {
-                            let entry = acc.entry(id).or_insert(Vec::new());
-
-                            entry.push(FilesWithSizes {
-                                path,
-                                width,
-                                height,
-                            });
-                        }
-                        acc
-                    })
-                    .into_iter()
-                    .map(|(id, files)| ImageWithFiles { id, files })
-                    .collect();
-
-                v.reverse();
-                v
-            })
+            .map(ImageWithFiles::consolidate)
             .map_err(From::from)
     }
 }

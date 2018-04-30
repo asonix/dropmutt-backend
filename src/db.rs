@@ -119,6 +119,19 @@ impl Handler<FetchImages> for DbActor {
     }
 }
 
+impl Handler<FetchImagesInGallery> for DbActor {
+    type Result = Result<Vec<models::ImageWithFiles>, DropmuttError>;
+
+    fn handle(&mut self, msg: FetchImagesInGallery, _: &mut Self::Context) -> Self::Result {
+        let conn: &PgConnection = &*self.conn.get()?;
+
+        match msg.before_id {
+            Some(id) => models::Gallery::before_id_by_name(&msg.gallery, msg.count, id, conn),
+            None => models::Gallery::recent_by_name(&msg.gallery, msg.count, conn),
+        }
+    }
+}
+
 pub struct CreateUser {
     pub username: String,
     pub password: String,
@@ -152,5 +165,15 @@ pub struct FetchImages {
 }
 
 impl Message for FetchImages {
+    type Result = Result<Vec<models::ImageWithFiles>, DropmuttError>;
+}
+
+pub struct FetchImagesInGallery {
+    pub gallery: String,
+    pub count: i64,
+    pub before_id: Option<i32>,
+}
+
+impl Message for FetchImagesInGallery {
     type Result = Result<Vec<models::ImageWithFiles>, DropmuttError>;
 }

@@ -30,7 +30,7 @@ use std::env;
 
 use actix::prelude::*;
 use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest, HttpResponse,
-                Json, Query, State,
+                Json, Path, Query, State,
                 middleware::{self, cors::Cors,
                              identity::{CookieIdentityPolicy, IdentityService, RequestIdentity}}};
 use actix_multipart::*;
@@ -270,6 +270,30 @@ fn fetch_images(
         .responder()
 }
 
+fn fetch_images_by_gallery(
+    path: Path<String>,
+    query: Query<ImageQuery>,
+    state: State<AppState>,
+) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
+    let gallery = path.into_inner();
+    let q = query.into_inner();
+
+    state
+        .db
+        .send(db::FetchImagesInGallery {
+            gallery,
+            count: q.count,
+            before_id: q.id,
+        })
+        .then(|res| match res {
+            Ok(res) => res,
+            Err(e) => Err(e.into()),
+        })
+        .map(|images| HttpResponse::Ok().json(images))
+        .from_err()
+        .responder()
+}
+
 fn prepare_connection() -> Pool<ConnectionManager<PgConnection>> {
     dotenv().ok();
 
@@ -336,6 +360,9 @@ fn main() {
                     })
                     .resource("/api/v1/images", |r| {
                         r.method(http::Method::GET).with2(fetch_images)
+                    })
+                    .resource("/api/v1/images/{gallery}", |r| {
+                        r.method(http::Method::GET).with3(fetch_images_by_gallery)
                     })
                     .register()
             })
