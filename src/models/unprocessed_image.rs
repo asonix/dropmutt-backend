@@ -1,9 +1,9 @@
 use diesel;
 use diesel::pg::PgConnection;
 
+use super::{File, Gallery, User};
 use error::DropmuttError;
 use schema::unprocessed_images;
-use super::{File, Gallery, User};
 
 #[derive(Queryable)]
 pub struct UnprocessedImage {

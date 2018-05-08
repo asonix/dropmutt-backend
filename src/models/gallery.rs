@@ -1,9 +1,9 @@
 use diesel;
 use diesel::pg::PgConnection;
 
+use super::ImageWithFiles;
 use error::DropmuttError;
 use schema::galleries;
-use super::ImageWithFiles;
 
 #[derive(Queryable)]
 pub struct Gallery {
@@ -45,11 +45,11 @@ impl Gallery {
         count: i64,
         conn: &PgConnection,
     ) -> Result<Vec<ImageWithFiles>, DropmuttError> {
+        use diesel::prelude::*;
         use schema::files;
         use schema::gallery_images;
-        use schema::images;
         use schema::image_files;
-        use diesel::prelude::*;
+        use schema::images;
 
         let image_ids: Vec<i32> = galleries::table
             .inner_join(
@@ -79,11 +79,11 @@ impl Gallery {
         id: i32,
         conn: &PgConnection,
     ) -> Result<Vec<ImageWithFiles>, DropmuttError> {
+        use diesel::prelude::*;
         use schema::files;
         use schema::gallery_images;
-        use schema::images;
         use schema::image_files;
-        use diesel::prelude::*;
+        use schema::images;
 
         let image_ids: Vec<i32> = galleries::table
             .inner_join(

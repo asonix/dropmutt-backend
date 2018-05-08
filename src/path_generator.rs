@@ -1,4 +1,8 @@
-use std::{path::{Path, PathBuf}, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
+use std::{
+    path::{Path, PathBuf}, sync::{
+        atomic::{AtomicUsize, Ordering}, Arc,
+    },
+};
 
 use form_data::FilenameGenerator;
 use mime;

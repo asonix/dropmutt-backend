@@ -1,7 +1,9 @@
 use std::io;
 
 use actix::MailboxError;
-use actix_web::{Error, HttpResponse, ResponseError, error::{ContentTypeError, MultipartError}};
+use actix_web::{
+    error::{ContentTypeError, MultipartError}, Error, HttpResponse, ResponseError,
+};
 use bcrypt::BcryptError;
 use diesel;
 use form_data;

@@ -1,9 +1,9 @@
 use diesel;
 use diesel::pg::PgConnection;
 
+use super::{File, Image};
 use error::DropmuttError;
 use schema::image_files;
-use super::{File, Image};
 
 #[derive(Queryable)]
 pub struct ImageFile {

@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use actix::prelude::*;
-use diesel::{pg::PgConnection, r2d2::{ConnectionManager, Pool}};
+use diesel::{
+    pg::PgConnection, r2d2::{ConnectionManager, Pool},
+};
 
 use error::DropmuttError;
 use image_processor::ProcessResponse;

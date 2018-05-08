@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use diesel;
 use diesel::pg::PgConnection;
 
+use super::UnprocessedImage;
 use error::DropmuttError;
 use schema::{self, images};
-use super::UnprocessedImage;
 
 #[derive(Debug, Deserialize, Queryable, Serialize)]
 pub struct FilesWithSizes {
@@ -80,9 +80,9 @@ impl ImageWithFiles {
     }
 
     pub fn recent(count: i64, conn: &PgConnection) -> Result<Vec<ImageWithFiles>, DropmuttError> {
+        use diesel::prelude::*;
         use schema::files;
         use schema::image_files;
-        use diesel::prelude::*;
 
         let image_ids: Vec<i32> = images::table
             .select(images::dsl::id)
@@ -106,9 +106,9 @@ impl ImageWithFiles {
         id: i32,
         conn: &PgConnection,
     ) -> Result<Vec<ImageWithFiles>, DropmuttError> {
+        use diesel::prelude::*;
         use schema::files;
         use schema::image_files;
-        use diesel::prelude::*;
 
         let image_ids: Vec<i32> = images::table
             .filter(images::dsl::id.lt(id))

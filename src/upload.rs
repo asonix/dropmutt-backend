@@ -1,8 +1,8 @@
 use actix_web::{HttpMessage, HttpRequest};
 use mime;
 
-use error::DropmuttError;
 use super::AppState;
+use error::DropmuttError;
 
 pub enum PostKind {
     Multipart,

@@ -1,9 +1,9 @@
 use diesel;
 use diesel::pg::PgConnection;
 
+use super::{Gallery, Image};
 use error::DropmuttError;
 use schema::gallery_images;
-use super::{Gallery, Image};
 
 #[derive(Queryable)]
 pub struct GalleryImage {

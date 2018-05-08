@@ -29,21 +29,28 @@ extern crate serde_urlencoded;
 use std::{env, path::PathBuf};
 
 use actix::prelude::*;
-use actix_web::{fs, http, server, App, AsyncResponder, HttpMessage, HttpRequest, HttpResponse,
-                Json, Path, Query, State,
-                middleware::{self, cors::Cors,
-                             identity::{CookieIdentityPolicy, IdentityService, RequestIdentity}}};
-use diesel::{pg::PgConnection, r2d2::{ConnectionManager, Pool}};
+use actix_web::{
+    fs, http,
+    middleware::{
+        self, cors::Cors, identity::{CookieIdentityPolicy, IdentityService, RequestIdentity},
+    },
+    server, App, AsyncResponder, HttpMessage, HttpRequest, HttpResponse, Json, Path, Query, State,
+};
+use diesel::{
+    pg::PgConnection, r2d2::{ConnectionManager, Pool},
+};
 use dotenv::dotenv;
 use form_data::*;
-use futures::{Future, future::{result, Either}};
+use futures::{
+    future::{result, Either}, Future,
+};
 use futures_cpupool::CpuPool;
 
 mod db;
 mod error;
 mod image_processor;
-mod path_generator;
 mod models;
+mod path_generator;
 mod schema;
 mod upload;
 
