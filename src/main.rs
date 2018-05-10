@@ -279,6 +279,7 @@ fn logout(mut req: HttpRequest<AppState>) -> HttpResponse {
 }
 
 fn check_auth(req: HttpRequest<AppState>) -> Result<HttpResponse, DropmuttError> {
+    info!("Check auth");
     req.identity()
         .map(|_| {
             HttpResponse::Ok().json(Success {
@@ -304,6 +305,7 @@ fn fetch_images(
     query: Query<ImageQuery>,
     state: State<AppState>,
 ) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
+    info!("fetch images");
     let q = query.into_inner();
     state
         .db
@@ -320,6 +322,22 @@ fn fetch_images(
         .responder()
 }
 
+fn fetch_galleries(
+    state: State<AppState>,
+) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
+    info!("fetch galleries");
+    state
+        .db
+        .send(db::FetchGalleries)
+        .then(|res| match res {
+            Ok(res) => res,
+            Err(e) => Err(e.into()),
+        })
+        .map(|galleries| HttpResponse::Ok().json(galleries))
+        .from_err()
+        .responder()
+}
+
 fn fetch_images_by_gallery(
     path: Path<String>,
     query: Query<ImageQuery>,
@@ -327,6 +345,7 @@ fn fetch_images_by_gallery(
 ) -> Box<Future<Item = HttpResponse, Error = DropmuttError>> {
     let gallery = path.into_inner();
     let q = query.into_inner();
+    info!("images by gallery: {}", gallery);
 
     state
         .db
@@ -408,16 +427,15 @@ fn main() {
                     .resource("/api/v1/images", |r| {
                         r.method(http::Method::GET).with2(fetch_images)
                     })
-                    .resource("/api/v1/images/{gallery}", |r| {
+                    .resource("/api/v1/galleries", |r| {
+                        r.method(http::Method::GET).with(fetch_galleries)
+                    })
+                    .resource("/api/v1/galleries/{gallery}", |r| {
                         r.method(http::Method::GET).with3(fetch_images_by_gallery)
                     })
                     .register()
             })
             .resource("/", |r| r.method(http::Method::GET).with(serve_app))
-            .handler(
-                "/static",
-                fs::StaticFiles::with_pool("static", pool.clone()),
-            )
             .handler(
                 "/uploads",
                 fs::StaticFiles::with_pool("uploads", pool.clone()),

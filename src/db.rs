@@ -97,6 +97,8 @@ impl Handler<StoreProcessedImage> for DbActor {
             )?;
 
             let image = models::NewImage::new(&msg.0).insert(conn)?;
+            let gallery = models::Gallery::by_id(msg.0.gallery_id(), conn)?;
+            models::NewGalleryImage::new(&gallery, &image).insert(conn)?;
 
             files.iter().fold(
                 Ok(image) as Result<_, DropmuttError>,
@@ -123,6 +125,21 @@ impl Handler<FetchImages> for DbActor {
             Some(id) => models::ImageWithFiles::before_id(msg.count, id, conn),
             None => models::ImageWithFiles::recent(msg.count, conn),
         }
+    }
+}
+
+impl Handler<FetchGalleries> for DbActor {
+    type Result = Result<Vec<String>, DropmuttError>;
+
+    fn handle(&mut self, _: FetchGalleries, _: &mut Self::Context) -> Self::Result {
+        let conn: &PgConnection = &*self.conn.get()?;
+
+        models::Gallery::all(conn).map(|galleries| {
+            galleries
+                .iter()
+                .map(|gallery| gallery.name().to_owned())
+                .collect()
+        })
     }
 }
 
@@ -179,6 +196,12 @@ pub struct FetchImages {
 
 impl Message for FetchImages {
     type Result = Result<Vec<models::ImageWithFiles>, DropmuttError>;
+}
+
+pub struct FetchGalleries;
+
+impl Message for FetchGalleries {
+    type Result = Result<Vec<String>, DropmuttError>;
 }
 
 pub struct FetchImagesInGallery {

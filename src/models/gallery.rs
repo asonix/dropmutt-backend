@@ -25,6 +25,19 @@ impl Gallery {
         self.nsfw
     }
 
+    pub fn all(conn: &PgConnection) -> Result<Vec<Gallery>, DropmuttError> {
+        use diesel::prelude::*;
+
+        galleries::table
+            .select((
+                galleries::dsl::id,
+                galleries::dsl::name,
+                galleries::dsl::nsfw,
+            ))
+            .get_results(conn)
+            .map_err(From::from)
+    }
+
     pub fn by_name(name: &str, conn: &PgConnection) -> Result<Gallery, DropmuttError> {
         use diesel::prelude::*;
 
@@ -36,6 +49,20 @@ impl Gallery {
                 galleries::dsl::name,
                 galleries::dsl::nsfw,
             ))
+            .get_result(conn)
+            .map_err(From::from)
+    }
+
+    pub fn by_id(id: i32, conn: &PgConnection) -> Result<Gallery, DropmuttError> {
+        use diesel::prelude::*;
+
+        galleries::table
+            .select((
+                galleries::dsl::id,
+                galleries::dsl::name,
+                galleries::dsl::nsfw,
+            ))
+            .find(id)
             .get_result(conn)
             .map_err(From::from)
     }
