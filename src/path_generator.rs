@@ -7,7 +7,7 @@ use std::{
 use form_data::FilenameGenerator;
 use mime;
 use mime_guess;
-use rand::{thread_rng, Rng};
+use rand::{thread_rng, distributions::Alphanumeric, Rng};
 
 #[derive(Clone)]
 pub struct PathGenerator {
@@ -33,7 +33,7 @@ impl PathGenerator {
 
         sections.reverse();
 
-        let filename: String = thread_rng().gen_ascii_chars().take(10).collect();
+        let filename: String = thread_rng().sample_iter(&Alphanumeric).take(10).collect();
 
         let mut file_path = sections
             .into_iter()
